@@ -18,8 +18,13 @@ struct Index {
   @State roadSegments: RoadSegment[] = DemoDataset.getSampleRoads();
   @State connectionMode: ConnectionMode = 'SIMULATOR_DEMO';
   @State zoomScaleMetersPerPx: number = 1.65;
+  @State panOffsetX: number = 0;
+  @State panOffsetY: number = 0;
+  @State northUpMode: boolean = false;
   @State showTestDrawer: boolean = false;
   @State isAutoWalking: boolean = false;
+  private dragStartX: number = 0;
+  private dragStartY: number = 0;
 
   private wearService: WearEngineService = new WearEngineService();
 
@@ -46,48 +51,117 @@ struct Index {
     }
   }
 
+  private recenterMap(): void {
+    this.panOffsetX = 0;
+    this.panOffsetY = 0;
+  }
+
   build() {
     Stack() {
-      // 1. Lớp bản đồ nền tự vẽ bằng Canvas (Mốc 1 & Mốc 3)
-      MapCanvas({
-        navState: this.navState,
-        routePoints: this.routePoints,
-        roadSegments: this.roadSegments,
-        isStale: this.connectionMode === 'STALE_DISCONNECTED',
-        zoomScaleMetersPerPx: this.zoomScaleMetersPerPx
-      })
-
-      // 2. Lớp giao diện nổi (Thẻ chỉ dẫn rẽ ở trên + Nút thu phóng + Thanh trạng thái ở dưới)
-      Column() {
-        // Thẻ chỉ dẫn rẽ phía trên
-        TurnBanner({
+      // 1. Lớp bản đồ nền tự vẽ bằng Canvas (Hỗ trợ cảm ứng vuốt/kéo & chạm đúp phóng to)
+      Stack() {
+        MapCanvas({
           navState: this.navState,
-          isStale: this.connectionMode === 'STALE_DISCONNECTED'
+          routePoints: this.routePoints,
+          roadSegments: this.roadSegments,
+          isStale: this.connectionMode === 'STALE_DISCONNECTED',
+          zoomScaleMetersPerPx: this.zoomScaleMetersPerPx,
+          panOffsetX: this.panOffsetX,
+          panOffsetY: this.panOffsetY,
+          northUpMode: this.northUpMode
         })
-          .margin({ top: 20 })
+      }
+      .width('100%')
+      .height('100%')
+      .gesture(
+        GestureGroup(GestureMode.Parallel,
+          PanGesture({ fingers: 1, distance: 3 })
+            .onActionStart(() => {
+              this.dragStartX = this.panOffsetX;
+              this.dragStartY = this.panOffsetY;
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              this.panOffsetX = this.dragStartX + event.offsetX;
+              this.panOffsetY = this.dragStartY + event.offsetY;
+            }),
+          TapGesture({ count: 2 })
+            .onAction(() => {
+              if (this.zoomScaleMetersPerPx > 1.0) {
+                this.adjustZoom(-0.45);
+              } else {
+                this.zoomScaleMetersPerPx = 1.65;
+              }
+            })
+        )
+      )
 
-        // Khoảng trống ở giữa dành cho bản đồ + Nút Zoom nhỏ bên phải
+      // 2. Lớp giao diện nổi (Thẻ chỉ dẫn rẽ ở trên + Nút cảm ứng trên mặt đồng hồ + Thanh trạng thái ở dưới)
+      Column() {
+        // Thẻ chỉ dẫn rẽ phía trên (Chạm để đồng bộ ngay hoặc kiểm tra tín hiệu)
         Row() {
+          TurnBanner({
+            navState: this.navState,
+            isStale: this.connectionMode === 'STALE_DISCONNECTED'
+          })
+        }
+        .margin({ top: 18 })
+        .onClick(() => {
+          this.recenterMap();
+        })
+
+        // Khoảng trống ở giữa dành cho bản đồ + Cụm nút cảm ứng hai bên mặt đồng hồ
+        Row() {
+          // Cụm nút bên trái: Đổi góc xoay (Heading-Up / North-Up) & Về tâm xe
+          Column() {
+            Button(this.northUpMode ? '⬆️' : '🧭')
+              .width(28)
+              .height(28)
+              .fontSize(13)
+              .fontColor('#E0F7FA')
+              .backgroundColor(this.northUpMode ? '#CC00897B' : '#AA101B28')
+              .borderRadius(14)
+              .onClick(() => {
+                this.northUpMode = !this.northUpMode;
+              })
+
+            if (Math.abs(this.panOffsetX) > 6 || Math.abs(this.panOffsetY) > 6) {
+              Button('🎯')
+                .width(28)
+                .height(28)
+                .fontSize(13)
+                .fontColor('#00E676')
+                .backgroundColor('#CC101B28')
+                .borderRadius(14)
+                .margin({ top: 6 })
+                .onClick(() => {
+                  this.recenterMap();
+                })
+            }
+          }
+          .margin({ left: 8 })
+
           Blank()
+
+          // Cụm nút bên phải: Phóng to (+) / Thu nhỏ (-)
           Column() {
             Button('+')
-              .width(26)
-              .height(26)
-              .fontSize(14)
+              .width(28)
+              .height(28)
+              .fontSize(15)
               .fontColor('#E0F7FA')
               .backgroundColor('#AA101B28')
-              .borderRadius(13)
+              .borderRadius(14)
               .onClick(() => {
                 this.adjustZoom(-0.35);
               })
 
             Button('-')
-              .width(26)
-              .height(26)
-              .fontSize(14)
+              .width(28)
+              .height(28)
+              .fontSize(15)
               .fontColor('#E0F7FA')
               .backgroundColor('#AA101B28')
-              .borderRadius(13)
+              .borderRadius(14)
               .margin({ top: 6 })
               .onClick(() => {
                 this.adjustZoom(0.35);

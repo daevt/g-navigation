@@ -857,7 +857,10 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     background: linear-gradient(180deg, #525d6e, #252c37);
     border-radius: 0 8px 8px 0;
     border-left: 3px solid #e53935;
+    cursor: pointer;
+    transition: transform 0.12s;
   }
+  .watch-crown:active { transform: translateX(-2px); }
   .watch-side-btn {
     position: absolute;
     right: -8px;
@@ -866,7 +869,10 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     height: 50px;
     background: #343d4b;
     border-radius: 0 5px 5px 0;
+    cursor: pointer;
+    transition: transform 0.12s;
   }
+  .watch-side-btn:active { transform: translateX(-2px); }
   .watch-screen {
     position: relative;
     width: 100%;
@@ -875,6 +881,7 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     border-radius: 52px;
     overflow: hidden;
     border: 2px solid #05070a;
+    user-select: none;
   }
   #watchMapBg {
     position: absolute;
@@ -891,7 +898,66 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
   #watchMapBg .leaflet-tile-pane {
     filter: invert(93%) hue-rotate(185deg) brightness(88%) contrast(95%);
   }
-  #watchCanvas { position: relative; width: 100%; height: 100%; display: block; z-index: 2; }
+  #watchCanvas {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 2;
+    cursor: grab;
+  }
+  #watchCanvas:active { cursor: grabbing; }
+  .w-touch-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    background: rgba(16, 27, 40, 0.86);
+    border: 1px solid #2b425b;
+    color: #e0f7fa;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+    transition: transform 0.1s, background 0.15s;
+  }
+  .w-touch-btn:hover { background: rgba(26, 44, 66, 0.95); border-color: #00e5ff; }
+  .w-touch-btn:active { transform: scale(0.9); }
+  .w-side-controls-left {
+    position: absolute;
+    left: 8px;
+    top: 54%;
+    transform: translateY(-50%);
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .w-side-controls-right {
+    position: absolute;
+    right: 8px;
+    top: 54%;
+    transform: translateY(-50%);
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .w-overlay-sheet {
+    position: absolute;
+    inset: 12px;
+    background: rgba(10, 16, 24, 0.96);
+    border: 1px solid #00e5ff;
+    border-radius: 40px;
+    z-index: 15;
+    display: none;
+    flex-direction: column;
+    padding: 14px 12px;
+    color: #eceff1;
+  }
+  .w-overlay-sheet.open { display: flex; }
   .w-turn-banner {
     z-index: 5;
     position: absolute;
@@ -906,7 +972,10 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     display: flex;
     align-items: center;
     gap: 9px;
+    cursor: pointer;
+    transition: transform 0.1s;
   }
+  .w-turn-banner:active { transform: translateX(-50%) scale(0.97); }
   .w-icon-box {
     width: 40px;
     height: 40px;
@@ -930,7 +999,10 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     display: flex;
     align-items: center;
     justify-content: space-between;
+    cursor: pointer;
+    transition: transform 0.1s;
   }
+  .w-bottom-bar:active { transform: translateX(-50%) scale(0.97); }
   .log-card {
     width: 100%;
     background: #101824;
@@ -1078,14 +1150,26 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
   <!-- BÊN PHẢI: ĐỒNG HỒ HUAWEI WATCH FIT 4 PRO (408x480 CHỮ NHẬT BO GÓC) + NHẬT KÝ P2P -->
   <div class="watch-panel">
     <div class="watch-case" id="watchCase">
-      <div class="watch-crown"></div>
-      <div class="watch-side-btn"></div>
-      <div class="watch-screen">
+      <div class="watch-crown" onclick="watchCrownPress()" title="Núm xoay Digital Crown: Bấm để về tâm bản đồ / đổi mức phóng to"></div>
+      <div class="watch-side-btn" onclick="toggleWatchQuickMenu()" title="Nút sườn dưới: Mở menu điều khiển nhanh trên đồng hồ"></div>
+      <div class="watch-screen" id="watchScreen">
         <div id="watchMapBg"></div>
         <canvas id="watchCanvas" width="306" height="366"></canvas>
 
-        <!-- Thẻ báo rẽ trên đồng hồ -->
-        <div class="w-turn-banner" id="wBanner">
+        <!-- Cụm nút cảm ứng bên trái mặt đồng hồ: Đổi góc xoay (Heading-Up / North-Up) & Về tâm xe -->
+        <div class="w-side-controls-left">
+          <button class="w-touch-btn" id="wCompassBtn" onclick="toggleWatchOrientation()" title="Đổi chế độ xoay bản đồ: Xoay theo hướng xe (Heading-Up) / Cố định hướng Bắc (North-Up)">🧭</button>
+          <button class="w-touch-btn" id="wRecenterBtn" style="display:none;border-color:#00e676;color:#00e676" onclick="recenterWatchMap()" title="Đưa bản đồ đồng hồ về lại tâm xe">🎯</button>
+        </div>
+
+        <!-- Cụm nút cảm ứng bên phải mặt đồng hồ: Phóng to (+) / Thu nhỏ (-) -->
+        <div class="w-side-controls-right">
+          <button class="w-touch-btn" onclick="adjustWatchZoom(-0.35)" title="Phóng to bản đồ đồng hồ (+)">+</button>
+          <button class="w-touch-btn" onclick="adjustWatchZoom(0.35)" title="Thu nhỏ bản đồ đồng hồ (−)">−</button>
+        </div>
+
+        <!-- Thẻ báo rẽ trên đồng hồ (Chạm để xem danh sách các khúc cua tiếp theo) -->
+        <div class="w-turn-banner" id="wBanner" onclick="toggleWatchStepsSheet()" title="Chạm vào thẻ báo rẽ để xem danh sách các bước rẽ tiếp theo">
           <div class="w-icon-box" id="wIconBox">
             <canvas id="wArrowCanvas" width="32" height="32"></canvas>
           </div>
@@ -1098,7 +1182,8 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
           </div>
         </div>
 
-      <div class="w-bottom-bar" style="z-index:5">
+        <!-- Thanh trạng thái dưới (Chạm để mở Menu cảm ứng nhanh trên đồng hồ) -->
+        <div class="w-bottom-bar" style="z-index:5" onclick="toggleWatchQuickMenu()" title="Chạm để mở bảng điều khiển nhanh trên đồng hồ">
           <div style="text-align:center">
             <div style="font-size:15px;font-weight:800;color:#00e5ff;line-height:1" id="wSpd">32</div>
             <div style="font-size:8px;color:#78909c">km/h</div>
@@ -1112,7 +1197,34 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
             <span id="wStatus" style="color:#00e676">P2P</span>
           </div>
         </div>
+
+        <!-- Lớp phủ 1: Danh sách các ngã rẽ tiếp theo khi chạm vào Banner phía trên -->
+        <div class="w-overlay-sheet" id="wStepsSheet">
+          <div style="font-size:12px;font-weight:800;color:#00e5ff;text-align:center;margin-bottom:8px;">
+            🛣️ Các ngã rẽ tiếp theo
+          </div>
+          <div id="wStepsList" style="flex:1;overflow-y:auto;font-size:11px;display:flex;flex-direction:column;gap:6px;"></div>
+          <button class="ios-btn gray" style="margin-top:8px;width:100%;border-radius:16px;padding:6px;" onclick="toggleWatchStepsSheet()">Đóng</button>
+        </div>
+
+        <!-- Lớp phủ 2: Menu điều khiển cảm ứng nhanh khi chạm vào Thanh dưới hoặc Nút sườn -->
+        <div class="w-overlay-sheet" id="wQuickMenu">
+          <div style="font-size:12px;font-weight:800;color:#00e676;text-align:center;margin-bottom:10px;">
+            ⌚ Điều khiển nhanh Fit 4 Pro
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px;flex:1;justify-content:center;">
+            <button class="ios-btn" style="width:100%;font-size:11px" onclick="recenterWatchMap();toggleWatchQuickMenu()">🎯 Đưa bản đồ về tâm xe</button>
+            <button class="ios-btn gray" style="width:100%;font-size:11px" id="wMenuOrientBtn" onclick="toggleWatchOrientation()">🧭 Chế độ: Xoay theo hướng xe</button>
+            <button class="ios-btn gray" style="width:100%;font-size:11px" id="wMenuVibBtn" onclick="toggleWatchHaptic()">📳 Rung cổ tay: ĐANG BẬT</button>
+            <button class="ios-btn green" style="width:100%;font-size:11px" onclick="requestWatchSyncNow();toggleWatchQuickMenu()">🔄 Yêu cầu iPhone đồng bộ lại</button>
+          </div>
+          <button class="ios-btn gray" style="margin-top:8px;width:100%;border-radius:16px;padding:6px;" onclick="toggleWatchQuickMenu()">Đóng</button>
+        </div>
       </div>
+    </div>
+
+    <div style="font-size:11px;color:#90a4ae;text-align:center;">
+      👆 <strong>Cảm ứng đồng hồ:</strong> Nắm kéo mặt đồng hồ để xem xung quanh · Chạm <strong>+ / −</strong> hoặc lăn chuột để Zoom · Chạm <strong>🧭</strong> đổi góc xoay · Chạm <strong>Banner trên / Thanh dưới</strong>
     </div>
 
     <div id="vibToast" style="height:18px;font-size:12px;font-weight:700;color:#00e676"></div>
@@ -1734,7 +1846,155 @@ async function toggleBluetooth() {
   }
 }
 
-// --- VẼ MÀN HÌNH ĐỒNG HỒ HUAWEI WATCH FIT 4 PRO (BÊN PHẢI) ---
+// --- VẼ MÀN HÌNH ĐỒNG HỒ HUAWEI WATCH FIT 4 PRO (BÊN PHẢI) & CẢM ỨNG ĐỒNG HỒ ---
+let watchScale = 1.65;      // mét / pixel (nhỏ = phóng to, lớn = thu nhỏ)
+let watchPanX = 0;          // độ lệch kéo ngang trên mặt đồng hồ (px)
+let watchPanY = 0;          // độ lệch kéo dọc trên mặt đồng hồ (px)
+let watchNorthUp = false;   // false = Xoay theo hướng xe (Heading-Up), true = Cố định hướng Bắc (North-Up)
+let watchHapticEnabled = true;
+let isDraggingWatch = false;
+let dragStartWatchX = 0;
+let dragStartWatchY = 0;
+
+function setupWatchTouchGestures() {
+  const canvas = document.getElementById('watchCanvas');
+  const screen = document.getElementById('watchScreen');
+  if (!canvas || !screen) return;
+
+  // 1. Kéo/Vuốt mặt đồng hồ bằng chuột hoặc cảm ứng tay (Pan)
+  const startDrag = (clientX, clientY) => {
+    isDraggingWatch = true;
+    dragStartWatchX = clientX - watchPanX;
+    dragStartWatchY = clientY - watchPanY;
+  };
+  const moveDrag = (clientX, clientY) => {
+    if (!isDraggingWatch) return;
+    watchPanX = Math.max(-180, Math.min(180, clientX - dragStartWatchX));
+    watchPanY = Math.max(-180, Math.min(180, clientY - dragStartWatchY));
+    const recBtn = document.getElementById('wRecenterBtn');
+    if (recBtn) {
+      recBtn.style.display = (Math.abs(watchPanX) > 6 || Math.abs(watchPanY) > 6) ? 'flex' : 'none';
+    }
+    renderWatchFit4Pro();
+  };
+  const endDrag = () => { isDraggingWatch = false; };
+
+  canvas.addEventListener('mousedown', (e) => startDrag(e.clientX, e.clientY));
+  window.addEventListener('mousemove', (e) => moveDrag(e.clientX, e.clientY));
+  window.addEventListener('mouseup', endDrag);
+
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) startDrag(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+  canvas.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 1) moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+  canvas.addEventListener('touchend', endDrag);
+
+  // 2. Chạm đúp (Double-Click / Double-Tap) trên mặt đồng hồ để Phóng to nhanh
+  canvas.addEventListener('dblclick', () => {
+    if (watchScale > 1.05) {
+      adjustWatchZoom(-0.45);
+    } else {
+      watchScale = 1.65;
+      renderWatchFit4Pro();
+    }
+  });
+
+  // 3. Lăn con lăn chuột trên mặt đồng hồ (giả lập xoay núm Digital Crown) để Zoom mượt
+  screen.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    adjustWatchZoom(e.deltaY > 0 ? 0.25 : -0.25);
+  }, { passive: false });
+}
+
+function adjustWatchZoom(delta) {
+  watchScale = Math.max(0.75, Math.min(3.5, +(watchScale + delta).toFixed(2)));
+  renderWatchFit4Pro();
+}
+
+function recenterWatchMap() {
+  watchPanX = 0;
+  watchPanY = 0;
+  const recBtn = document.getElementById('wRecenterBtn');
+  if (recBtn) recBtn.style.display = 'none';
+  renderWatchFit4Pro();
+}
+
+function toggleWatchOrientation() {
+  watchNorthUp = !watchNorthUp;
+  const btn = document.getElementById('wCompassBtn');
+  if (btn) {
+    btn.innerText = watchNorthUp ? '⬆️' : '🧭';
+    btn.style.background = watchNorthUp ? 'rgba(0, 137, 123, 0.9)' : 'rgba(16, 27, 40, 0.86)';
+  }
+  const mBtn = document.getElementById('wMenuOrientBtn');
+  if (mBtn) {
+    mBtn.innerText = watchNorthUp ? '⬆️ Chế độ: Cố định hướng Bắc' : '🧭 Chế độ: Xoay theo hướng xe';
+  }
+  renderWatchFit4Pro();
+}
+
+function watchCrownPress() {
+  const stepsSheet = document.getElementById('wStepsSheet');
+  const quickMenu = document.getElementById('wQuickMenu');
+  if ((stepsSheet && stepsSheet.classList.contains('open')) || (quickMenu && quickMenu.classList.contains('open'))) {
+    stepsSheet.classList.remove('open');
+    quickMenu.classList.remove('open');
+    return;
+  }
+  if (Math.abs(watchPanX) > 4 || Math.abs(watchPanY) > 4) {
+    recenterWatchMap();
+  } else {
+    watchScale = watchScale > 1.2 ? 1.0 : 1.65;
+    renderWatchFit4Pro();
+  }
+}
+
+function toggleWatchStepsSheet() {
+  const sheet = document.getElementById('wStepsSheet');
+  const quick = document.getElementById('wQuickMenu');
+  if (quick) quick.classList.remove('open');
+  if (!sheet) return;
+  const opening = !sheet.classList.contains('open');
+  sheet.classList.toggle('open', opening);
+  if (opening) {
+    const listEl = document.getElementById('wStepsList');
+    if (!currentSteps || currentSteps.length === 0) {
+      listEl.innerHTML = `<div style="color:#90a4ae;text-align:center;margin-top:24px;">Chưa có lộ trình nhiều chặng.<br/>Hãy chọn điểm đến trên iPhone hoặc bấm Chỉ đường!</div>`;
+    } else {
+      listEl.innerHTML = currentSteps.slice(0, 8).map((st, idx) => `
+        <div style="background:#152232;border:1px solid #243850;border-radius:12px;padding:6px 8px;display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-weight:700;color:#00e5ff">${idx + 1}. ${st.maneuverType}</div>
+            <div style="color:#cfd8dc">${st.roadName || 'Đường phía trước'}</div>
+          </div>
+          <span style="color:#00e676;font-weight:700">${st.distanceMeters || 0}m</span>
+        </div>
+      `).join('');
+    }
+  }
+}
+
+function toggleWatchQuickMenu() {
+  const quick = document.getElementById('wQuickMenu');
+  const sheet = document.getElementById('wStepsSheet');
+  if (sheet) sheet.classList.remove('open');
+  if (quick) quick.classList.toggle('open');
+}
+
+function toggleWatchHaptic() {
+  watchHapticEnabled = !watchHapticEnabled;
+  const btn = document.getElementById('wMenuVibBtn');
+  if (btn) {
+    btn.innerText = watchHapticEnabled ? '📳 Rung cổ tay: ĐANG BẬT' : '🔕 Rung cổ tay: ĐÃ TẮT';
+  }
+}
+
+async function requestWatchSyncNow() {
+  recenterWatchMap();
+  await onRealGpsUpdate(realGpsLat, realGpsLng, realGpsSpeedKmh, realGpsHeading, realGpsAccuracy || 10, false);
+}
 
 function drawVectorManeuverArrow(mType, isReroute) {
   const canvas = document.getElementById('wArrowCanvas');
@@ -1763,14 +2023,19 @@ function drawVectorManeuverArrow(mType, isReroute) {
 }
 
 function projectToWatchScreen(lat, lng, centerLat, centerLng, heading, w, h) {
-  const scale = 1.65;
+  const scale = watchScale;
   const cosLat = Math.cos(centerLat * Math.PI / 180.0);
   const northM = (lat - centerLat) * 111320.0;
   const eastM = (lng - centerLng) * 111320.0 * cosLat;
-  const rad = (heading * Math.PI) / 180.0;
+  const effectiveHeading = watchNorthUp ? 0 : heading;
+  const rad = (effectiveHeading * Math.PI) / 180.0;
   const rotX = eastM * Math.cos(rad) - northM * Math.sin(rad);
   const rotY = eastM * Math.sin(rad) + northM * Math.cos(rad);
-  return { x: w * 0.5 + rotX / scale, y: h * 0.67 - rotY / scale };
+  const anchorY = watchNorthUp ? h * 0.54 : h * 0.67;
+  return {
+    x: w * 0.5 + watchPanX + rotX / scale,
+    y: anchorY + watchPanY - rotY / scale
+  };
 }
 
 function renderWatchFit4Pro() {
@@ -1823,7 +2088,7 @@ function renderWatchFit4Pro() {
   wStatus.style.color = isStale ? '#ff5252' : '#00e676';
   wStatus.innerText = isStale ? 'MẤT KN' : 'P2P';
 
-  if (s.vib > 0 && s.seq !== lastVibSeq) {
+  if (watchHapticEnabled && s.vib > 0 && s.seq !== lastVibSeq) {
     lastVibSeq = s.seq;
     const wc = document.getElementById('watchCase');
     const vt = document.getElementById('vibToast');
@@ -1833,21 +2098,24 @@ function renderWatchFit4Pro() {
   }
 
   if (watchMap) {
-    watchMap.setView([s.lat, s.lng], 17, { animate: false });
+    const zLevel = watchScale <= 1.0 ? 18 : (watchScale <= 1.85 ? 17 : 16);
+    watchMap.setView([s.lat, s.lng], zLevel, { animate: false });
     const bgEl = document.getElementById('watchMapBg');
-    bgEl.style.transform = `rotate(${-s.hdg}deg)`;
+    const rotDeg = watchNorthUp ? 0 : -s.hdg;
+    bgEl.style.transform = `translate(${watchPanX}px, ${watchPanY}px) rotate(${rotDeg}deg)`;
   }
 
   const canvas = document.getElementById('watchCanvas');
   const c = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
-  const ax = w * 0.5, ay = h * 0.67;
+  const ax = w * 0.5 + watchPanX;
+  const ay = (watchNorthUp ? h * 0.54 : h * 0.67) + watchPanY;
 
   c.clearRect(0, 0, w, h);
 
   c.strokeStyle = 'rgba(0, 229, 255, 0.16)';
   c.lineWidth = 1;
-  c.beginPath(); c.arc(ax, ay, 100 / 1.65, 0, Math.PI * 2); c.stroke();
+  c.beginPath(); c.arc(ax, ay, 100 / watchScale, 0, Math.PI * 2); c.stroke();
 
   for (const seg of roads) {
     if (!seg.p || seg.p.length < 2) continue;
@@ -1895,12 +2163,16 @@ function renderWatchFit4Pro() {
   }
 
   c.save();
+  c.translate(ax, ay);
+  if (watchNorthUp) {
+    c.rotate((s.hdg * Math.PI) / 180.0);
+  }
   c.fillStyle = isStale ? 'rgba(120,144,156,0.22)' : 'rgba(0,229,255,0.22)';
-  c.beginPath(); c.arc(ax, ay, 18, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(0, 0, 18, 0, Math.PI * 2); c.fill();
   c.fillStyle = isStale ? '#90A4AE' : '#00E5FF';
   c.strokeStyle = '#FFF'; c.lineWidth = 2;
   c.beginPath();
-  c.moveTo(ax, ay - 11); c.lineTo(ax + 9, ay + 9); c.lineTo(ax, ay + 4); c.lineTo(ax - 9, ay + 9);
+  c.moveTo(0, -11); c.lineTo(9, 9); c.lineTo(0, 4); c.lineTo(-9, 9);
   c.closePath(); c.fill(); c.stroke();
   c.restore();
 
@@ -1920,6 +2192,7 @@ async function pollWatchState() {
 
 window.addEventListener('DOMContentLoaded', () => {
   initMap();
+  setupWatchTouchGestures();
   setInterval(pollWatchState, 1000);
 });
 </script>

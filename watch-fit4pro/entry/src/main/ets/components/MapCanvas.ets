@@ -17,6 +17,9 @@ export struct MapCanvas {
   @Prop @Watch('onDataChange') roadSegments: RoadSegment[] = [];
   @Prop @Watch('onDataChange') isStale: boolean = false;
   @Prop @Watch('onDataChange') zoomScaleMetersPerPx: number = 1.65;
+  @Prop @Watch('onDataChange') panOffsetX: number = 0;
+  @Prop @Watch('onDataChange') panOffsetY: number = 0;
+  @Prop @Watch('onDataChange') northUpMode: boolean = false;
 
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
@@ -40,16 +43,17 @@ export struct MapCanvas {
     const northMeters = (lat - centerLat) * 111320.0;
     const eastMeters = (lng - centerLng) * 111320.0 * cosLat;
 
-    // Xoay theo góc heading (để hướng xe luôn chỉ lên trên: -Y)
-    const rad = (this.navState.heading * Math.PI) / 180.0;
+    // Xoay theo góc heading (Heading-Up) hoặc giữ cố định hướng Bắc (North-Up)
+    const activeAngle = this.northUpMode ? 0.0 : this.navState.heading;
+    const rad = (activeAngle * Math.PI) / 180.0;
     const cosH = Math.cos(rad);
     const sinH = Math.sin(rad);
 
     const rotX = eastMeters * cosH - northMeters * sinH;
     const rotY = eastMeters * sinH + northMeters * cosH;
 
-    const anchorX = this.canvasW * 0.5;
-    const anchorY = this.canvasH * 0.67;
+    const anchorX = this.canvasW * 0.5 + this.panOffsetX;
+    const anchorY = this.canvasH * 0.67 + this.panOffsetY;
 
     const px = anchorX + rotX / this.zoomScaleMetersPerPx;
     const py = anchorY - rotY / this.zoomScaleMetersPerPx;
@@ -64,8 +68,8 @@ export struct MapCanvas {
 
     const w = this.canvasW;
     const h = this.canvasH;
-    const anchorX = w * 0.5;
-    const anchorY = h * 0.67;
+    const anchorX = w * 0.5 + this.panOffsetX;
+    const anchorY = h * 0.67 + this.panOffsetY;
 
     // 1. Nền tối AMOLED tiết kiệm pin và chống chói ngoài trời
     c.clearRect(0, 0, w, h);
