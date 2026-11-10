@@ -367,46 +367,30 @@ async function handleSearchRequest(url: URL, env: Env): Promise<Response> {
 
   if (env.VIETMAP_API_KEY && env.VIETMAP_API_KEY !== "YOUR_VIETMAP_API_KEY") {
     try {
-      const searchUrl = new URL("https://maps.vietmap.vn/api/search/v3");
+      const searchUrl = new URL("https://maps.vietmap.vn/api/search");
+      searchUrl.searchParams.set("api-version", "1.1");
       searchUrl.searchParams.set("apikey", env.VIETMAP_API_KEY);
       searchUrl.searchParams.set("text", q);
-      searchUrl.searchParams.set("focus", `${lat},${lng}`);
+      searchUrl.searchParams.set("focus.point.lat", lat);
+      searchUrl.searchParams.set("focus.point.lon", lng);
 
       const res = await fetch(searchUrl.toString());
       if (res.ok) {
-        const items: any[] = await res.json();
-        const topItems = items.slice(0, 6);
-        const results = await Promise.all(
-          topItems.map(async (item) => {
-            if (item.lat && item.lng) {
-              return {
-                name: item.name || item.display || q,
-                address: item.address || item.display || "",
-                lat: Number(item.lat),
-                lng: Number(item.lng),
-              };
-            }
-            if (item.ref_id) {
-              const placeUrl = `https://maps.vietmap.vn/api/place/v3?apikey=${encodeURIComponent(
-                env.VIETMAP_API_KEY!
-              )}&refid=${encodeURIComponent(item.ref_id)}`;
-              const pRes = await fetch(placeUrl);
-              if (pRes.ok) {
-                const pData: any = await pRes.json();
-                return {
-                  name: item.name || pData.name || q,
-                  address: item.address || pData.address || "",
-                  lat: Number(pData.lat),
-                  lng: Number(pData.lng),
-                };
-              }
-            }
-            return null;
-          })
-        );
+        const body: any = await res.json();
+        const features: any[] = body?.data?.features || [];
+        const results = features.slice(0, 6).map((f) => {
+          const coords: number[] = f?.geometry?.coordinates || [];
+          const props: any = f?.properties || {};
+          return {
+            name: String(props.name || props.label || q),
+            address: String(props.label || props.region || ""),
+            lat: Number(coords[1]),
+            lng: Number(coords[0]),
+          };
+        });
         return jsonResponse({
           provider: "vietmap",
-          results: results.filter((r) => r && Number.isFinite(r.lat) && Number.isFinite(r.lng)),
+          results: results.filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng)),
         });
       }
     } catch {

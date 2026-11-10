@@ -9,6 +9,7 @@ G Navigation — Máy ảo iPhone (iOS App) + Trạm P2P kết nối trực ti�
 
 import json
 import math
+import os
 import socket
 import threading
 import time
@@ -17,6 +18,26 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8787
+
+
+def load_vietmap_api_key() -> str:
+    env_key = os.environ.get("VIETMAP_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    for candidate in (".env", "../.env", "backend-worker/.dev.vars"):
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("VIETMAP_API_KEY="):
+                            return line.split("=", 1)[1].strip().strip('"').strip("'")
+            except Exception:
+                pass
+    return ""
+
+
+VIETMAP_API_KEY = load_vietmap_api_key()
 
 
 def get_lan_ip() -> str:
@@ -255,7 +276,112 @@ def fetch_overpass_roads(lat: float, lng: float, radius: int = 340) -> tuple[str
         return tile_id, WATCH_HUB["roads"]
 
 
+def decode_polyline5(encoded: str) -> list[list[float]]:
+    index = 0
+    lat = 0
+    lng = 0
+    coords: list[list[float]] = []
+    length = len(encoded)
+    while index < length:
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        shift = 0
+        result = 0
+        while True:
+            b = ord(encoded[index]) - 63
+            index += 1
+            result |= (b & 0x1F) << shift
+            shift += 5
+            if b < 0x20:
+                break
+        dlng = ~(result >> 1) if (result & 1) else (result >> 1)
+        lng += dlng
+
+        coords.append([round(lat / 1e5, 6), round(lng / 1e5, 6)])
+    return coords
+
+
+def map_vietmap_sign(sign: int) -> str:
+    return {
+        -3: "SHARP_LEFT",
+        -2: "TURN_LEFT",
+        -1: "SLIGHT_LEFT",
+        0: "STRAIGHT",
+        1: "SLIGHT_RIGHT",
+        2: "TURN_RIGHT",
+        3: "SHARP_RIGHT",
+        4: "ARRIVE",
+        5: "ARRIVE",
+        6: "ROUNDABOUT",
+        -98: "UTURN",
+        7: "UTURN",
+        8: "UTURN",
+    }.get(sign, "STRAIGHT")
+
+
 def fetch_osrm_route(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> dict:
+    # Ưu tiên gọi VIETMAP Route v1.1/v4 với vehicle=motorcycle nếu đã có VIETMAP_API_KEY
+    if VIETMAP_API_KEY:
+        try:
+            vm_url = (
+                f"https://maps.vietmap.vn/api/route?api-version=1.1"
+                f"&apikey={urllib.parse.quote(VIETMAP_API_KEY)}"
+                f"&point={origin_lat:.6f},{origin_lng:.6f}"
+                f"&point={dest_lat:.6f},{dest_lng:.6f}"
+                f"&vehicle=motorcycle&points_encoded=true"
+            )
+            req = urllib.request.Request(vm_url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                vm_data = json.loads(resp.read().decode("utf-8"))
+            path = (vm_data.get("paths") or [None])[0]
+            if path:
+                pts = (
+                    decode_polyline5(path["points"])
+                    if isinstance(path.get("points"), str)
+                    else [[round(c[1], 6), round(c[0], 6)] for c in path.get("points", {}).get("coordinates", [])]
+                )
+                steps = []
+                for inst in path.get("instructions") or []:
+                    interval = inst.get("interval") or [0, 0]
+                    idx0 = min(max(0, int(interval[0])), max(0, len(pts) - 1))
+                    pt = pts[idx0] if pts else [origin_lat, origin_lng]
+                    road = str(inst.get("street_name") or inst.get("text") or "Đường phía trước").strip()[:34]
+                    steps.append(
+                        {
+                            "maneuverType": map_vietmap_sign(int(inst.get("sign") or 0)),
+                            "text": str(inst.get("text") or road),
+                            "roadName": road,
+                            "distanceMeters": int(round(float(inst.get("distance") or 0))),
+                            "durationSeconds": int(round(float(inst.get("time") or 0) / 1000.0)),
+                            "location": pt,
+                            "interval": [int(interval[0]), int(interval[1])],
+                        }
+                    )
+                add_log(
+                    f"VIETMAP Route (motorcycle): {int(round(path.get('distance', 0)))}m, {len(steps)} chỉ dẫn"
+                )
+                return {
+                    "routeId": f"vm_{int(time.time())}",
+                    "provider": "vietmap",
+                    "vehicle": "motorcycle",
+                    "distanceMeters": int(round(float(path.get("distance") or 0))),
+                    "durationSeconds": int(round(float(path.get("time") or 0) / 1000.0)),
+                    "points": pts,
+                    "steps": steps,
+                }
+        except Exception as e:
+            add_log(f"VIETMAP Route lỗi ({e}), chuyển sang OSRM fallback...")
+
     coords = f"{origin_lng:.6f},{origin_lat:.6f};{dest_lng:.6f},{dest_lat:.6f}"
     url = f"https://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=true"
     req = urllib.request.Request(url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
@@ -1144,6 +1270,37 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
             if not q:
                 self._send_json({"results": []})
                 return
+            if VIETMAP_API_KEY:
+                try:
+                    vm_s_url = (
+                        f"https://maps.vietmap.vn/api/search?api-version=1.1"
+                        f"&apikey={urllib.parse.quote(VIETMAP_API_KEY)}"
+                        f"&text={urllib.parse.quote(q)}"
+                    )
+                    req = urllib.request.Request(vm_s_url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
+                    with urllib.request.urlopen(req, timeout=8) as resp:
+                        vm_body = json.loads(resp.read().decode("utf-8"))
+                    feats = (vm_body.get("data") or {}).get("features") or []
+                    results = []
+                    for f in feats[:6]:
+                        coords = (f.get("geometry") or {}).get("coordinates") or []
+                        props = f.get("properties") or {}
+                        if len(coords) >= 2:
+                            results.append(
+                                {
+                                    "name": str(props.get("name") or props.get("label") or q),
+                                    "address": str(props.get("label") or props.get("region") or ""),
+                                    "lat": float(coords[1]),
+                                    "lng": float(coords[0]),
+                                }
+                            )
+                    if results:
+                        add_log(f"VIETMAP Search: '{q}' ({len(results)} kết quả)")
+                        self._send_json({"provider": "vietmap", "results": results})
+                        return
+                except Exception as e:
+                    add_log(f"VIETMAP Search fallback: {e}")
+
             try:
                 nom_url = (
                     "https://nominatim.openstreetmap.org/search?format=json&countrycodes=vn&limit=5&q="
