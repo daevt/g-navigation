@@ -181,42 +181,88 @@ struct ContentView: View {
                     .padding(14)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                } else {
-                    // Các điểm đến mẫu nhanh để chạy thử ngay ngoài đường
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Điểm đến thử nhanh (Xe máy · Motorcycle):")
-                            .font(.caption.bold())
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 8) {
-                            Button("Nhà hát TP (Q.1)") {
-                                Task {
-                                    await navEngine.startNavigation(
-                                        to: CLLocationCoordinate2D(latitude: 10.7769, longitude: 106.7032)
-                                    )
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .font(.caption)
-
-                            Button("Dinh Độc Lập") {
-                                Task {
-                                    await navEngine.startNavigation(
-                                        to: CLLocationCoordinate2D(latitude: 10.7770, longitude: 106.6953)
-                                    )
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .font(.caption)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
 
-                Spacer()
+                // Các điểm đến mẫu nhanh để chạy thử ngay ngoài đường
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button("🧭 ĐH Bách Khoa HN") {
+                            Task {
+                                await navEngine.startNavigation(
+                                    to: CLLocationCoordinate2D(latitude: 21.0045, longitude: 105.8431)
+                                )
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+
+                        Button("🧭 Hồ Gươm") {
+                            Task {
+                                await navEngine.startNavigation(
+                                    to: CLLocationCoordinate2D(latitude: 21.0285, longitude: 105.8542)
+                                )
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+
+                        Button("🧭 Times City") {
+                            Task {
+                                await navEngine.startNavigation(
+                                    to: CLLocationCoordinate2D(latitude: 20.9958, longitude: 105.8675)
+                                )
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+
+                        Button("🧭 Lăng Bác") {
+                            Task {
+                                await navEngine.startNavigation(
+                                    to: CLLocationCoordinate2D(latitude: 21.0368, longitude: 105.8347)
+                                )
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+                    }
+                }
+
+                // BẢN ĐỒ TƯƠNG TÁC TRỰC TIẾP TRÊN IPHONE (Hiển thị vị trí GPS thật + Tuyến đường xanh + Chạm chọn đích)
+                ZStack(alignment: .bottomTrailing) {
+                    InteractiveNavigationMapView(
+                        userCoordinate: navEngine.currentLocation,
+                        destinationCoordinate: navEngine.destinationCoord,
+                        routePoints: navEngine.activeRoute?.points ?? [],
+                        recenterTrigger: navEngine.recenterTrigger,
+                        onSelectDestination: { coord in
+                            Task {
+                                await navEngine.startNavigation(to: coord)
+                            }
+                        }
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                    )
+
+                    VStack(spacing: 8) {
+                        Button {
+                            navEngine.requestLocationPermissions()
+                        } label: {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.cyan)
+                                .frame(width: 38, height: 38)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .shadow(radius: 4)
+                        }
+                    }
+                    .padding(12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding()
             .navigationTitle("G Navigation")
@@ -404,6 +450,127 @@ struct ContentView: View {
             )
         } catch {
             wearManager.appendLog("Lỗi tìm kiếm: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - Bản đồ MapKit tương tác trên iPhone (Vẽ tuyến đường xanh + Vị trí GPS thật + Chạm lên bản đồ để dẫn đường)
+
+struct InteractiveNavigationMapView: UIViewRepresentable {
+    let userCoordinate: CLLocationCoordinate2D
+    let destinationCoordinate: CLLocationCoordinate2D?
+    let routePoints: [[Double]]
+    let recenterTrigger: Int
+    let onSelectDestination: (CLLocationCoordinate2D) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelectDestination: onSelectDestination)
+    }
+
+    func makeUIView(context: Context) -> MKMapView {
+        let mapView = MKMapView(frame: .zero)
+        mapView.delegate = context.coordinator
+        mapView.showsUserLocation = true
+        mapView.showsCompass = true
+        mapView.showsScale = true
+        mapView.pointOfInterestFilter = .includingAll
+
+        let region = MKCoordinateRegion(
+            center: userCoordinate,
+            latitudinalMeters: 900,
+            longitudinalMeters: 900
+        )
+        mapView.setRegion(region, animated: false)
+
+        // Cho phép chạm hoặc nhấn giữ lên bản đồ iPhone để chọn điểm đến chỉ đường
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleMapTap(_:)))
+        tapGesture.numberOfTapsRequired = 1
+        mapView.addGestureRecognizer(tapGesture)
+
+        context.coordinator.mapView = mapView
+        return mapView
+    }
+
+    func updateUIView(_ mapView: MKMapView, context: Context) {
+        // 1. Khi người dùng bấm nút Vị trí hiện tại hoặc mới lấy được GPS lần đầu -> Đưa tâm bản đồ về vị trí thật
+        if context.coordinator.lastRecenterTrigger != recenterTrigger {
+            context.coordinator.lastRecenterTrigger = recenterTrigger
+            let region = MKCoordinateRegion(
+                center: userCoordinate,
+                latitudinalMeters: 800,
+                longitudinalMeters: 800
+            )
+            mapView.setRegion(region, animated: true)
+        } else if !context.coordinator.hasCenteredOnce && (userCoordinate.latitude != 21.028511 || userCoordinate.longitude != 105.854444) {
+            context.coordinator.hasCenteredOnce = true
+            let region = MKCoordinateRegion(
+                center: userCoordinate,
+                latitudinalMeters: 800,
+                longitudinalMeters: 800
+            )
+            mapView.setRegion(region, animated: true)
+        }
+
+        // 2. Cập nhật ghim Điểm đến
+        let existingPins = mapView.annotations.filter { !($0 is MKUserLocation) }
+        mapView.removeAnnotations(existingPins)
+        if let dest = destinationCoordinate {
+            let pin = MKPointAnnotation()
+            pin.coordinate = dest
+            pin.title = "Điểm đến"
+            mapView.addAnnotation(pin)
+        }
+
+        // 3. Cập nhật đường vẽ lộ trình VIETMAP (MKPolyline màu xanh lá sáng)
+        let routeSignature = "\(routePoints.count)_\(routePoints.first?.first ?? 0)_\(routePoints.last?.last ?? 0)"
+        if context.coordinator.lastRouteSignature != routeSignature {
+            context.coordinator.lastRouteSignature = routeSignature
+            mapView.removeOverlays(mapView.overlays)
+
+            let coords: [CLLocationCoordinate2D] = routePoints.compactMap { pt in
+                guard pt.count >= 2 else { return nil }
+                return CLLocationCoordinate2D(latitude: pt[0], longitude: pt[1])
+            }
+            if coords.count >= 2 {
+                let polyline = MKPolyline(coordinates: coords, count: coords.count)
+                mapView.addOverlay(polyline)
+                mapView.setVisibleMapRect(
+                    polyline.boundingMapRect,
+                    edgePadding: UIEdgeInsets(top: 44, left: 36, bottom: 44, right: 36),
+                    animated: true
+                )
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        weak var mapView: MKMapView?
+        let onSelectDestination: (CLLocationCoordinate2D) -> Void
+        var lastRecenterTrigger: Int = -1
+        var lastRouteSignature: String = ""
+        var hasCenteredOnce: Bool = false
+
+        init(onSelectDestination: @escaping (CLLocationCoordinate2D) -> Void) {
+            self.onSelectDestination = onSelectDestination
+        }
+
+        @objc func handleMapTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended, let mapView = mapView else { return }
+            let point = gesture.location(in: mapView)
+            let coord = mapView.convert(point, toCoordinateFrom: mapView)
+            onSelectDestination(coord)
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor(red: 0.19, green: 0.82, blue: 0.35, alpha: 0.95)
+                renderer.lineWidth = 6.0
+                renderer.lineCap = .round
+                renderer.lineJoin = .round
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
         }
     }
 }

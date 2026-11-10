@@ -20,6 +20,8 @@ final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDeleg
     @Published var isRerouting: Bool = false
 
     @Published var activeRoute: RouteResponseDTO?
+    @Published var destinationCoord: CLLocationCoordinate2D?
+    @Published var recenterTrigger: Int = 0
     @Published var currentStepIndex: Int = 0
     @Published var distanceToNextTurnMeters: Int = 85
     @Published var remainingDistanceMeters: Int = 0
@@ -30,7 +32,6 @@ final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDeleg
     private var packetSeq: Int = 0
     private var lastLoadedTileId: String = ""
     private var latestRoadsResponse: RoadsResponseDTO?
-    private var destinationCoord: CLLocationCoordinate2D?
 
     private var fired100mVibForStep: Int = -1
     private var fired30mVibForStep: Int = -1
@@ -66,6 +67,7 @@ final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDeleg
         }
         locationManager.startUpdatingLocation()
         locationManager.startUpdatingHeading()
+        recenterTrigger += 1
     }
 
     // MARK: - Mốc 2: Gửi chỉ dẫn mẫu + Cụm đường giả & Kiểm thử khóa màn hình
