@@ -1,4 +1,5 @@
 import hilog from '@ohos.hilog';
+import http from '@ohos.net.http';
 import util from '@ohos.util';
 import {
   ConnectionMode,
@@ -11,15 +12,15 @@ import {
 import { VibrationService } from './VibrationService';
 
 /**
- * Cấu hình định danh ứng dụng iPhone đối tác qua Huawei Wear Engine P2P.
- * BẮT BUỘC khớp với Bundle ID thực tế của app iPhone (xem SETUP_GUIDE.md).
+ * Cấu hình định danh ứng dụng iPhone đối tác qua Huawei Wear Engine P2P
+ * và cầu nối LAN P2P Relay khi chạy trên máy ảo HarmonyOS Emulator trong DevEco Studio.
  */
 export class WearEngineConfig {
   static readonly IOS_PEER_BUNDLE_ID: string = 'com.gnavigation.ios';
-  /** Phải khớp với chứng chỉ / App ID đăng ký trên Huawei Developer Console */
   static readonly IOS_PEER_FINGERPRINT: string = 'com.gnavigation.ios';
-  /** Thời gian tối đa (ms) không nhận được gói tin trước khi ẩn chỉ dẫn cũ (Mốc 4) */
   static readonly STALE_TIMEOUT_MS: number = 12000;
+  /** Địa chỉ P2P Relay trên máy tính Windows để Emulator HarmonyOS nhận dữ liệu thật từ iPhone */
+  static readonly LAN_RELAY_STATE_URL: string = 'http://192.168.102.80:8787/api/state';
 }
 
 export type NavUpdateCallback = (
@@ -36,6 +37,7 @@ export class WearEngineService {
   private connectionMode: ConnectionMode = 'SIMULATOR_DEMO';
 
   private lastPacketTimeMs: number = Date.now();
+  private lastRelaySeq: number = -1;
   private currentRouteId: string = 'demo_route';
   private routeChunks: Map<number, GeoPoint[]> = new Map();
   private expectedRouteChunkTotal: number = 0;
@@ -46,6 +48,7 @@ export class WearEngineService {
 
   private listener: NavUpdateCallback | null = null;
   private watchdogTimerId: number = -1;
+  private relayPollTimerId: number = -1;
   private demoTimerId: number = -1;
   private demoProgressIdx: number = 2;
 
@@ -55,11 +58,12 @@ export class WearEngineService {
   }
 
   /**
-   * Khởi tạo lắng nghe Wear Engine P2P và bộ canh thời gian mất kết nối (Watchdog)
+   * Khởi tạo lắng nghe Wear Engine P2P + đồng bộ trực tiếp từ P2P Relay (cho DevEco Emulator)
    */
   start(): void {
     this.startWatchdog();
     this.registerWearEngineP2P();
+    this.startLanRelayPolling();
   }
 
   stop(): void {
@@ -67,19 +71,116 @@ export class WearEngineService {
       clearInterval(this.watchdogTimerId);
       this.watchdogTimerId = -1;
     }
+    if (this.relayPollTimerId !== -1) {
+      clearInterval(this.relayPollTimerId);
+      this.relayPollTimerId = -1;
+    }
     this.stopSimulatorWalk();
   }
 
   /**
-   * Đăng ký nhận bản tin P2P từ iPhone qua Huawei Wear Engine SDK trên HarmonyOS.
-   * Ghi chú: Trên máy ảo DevEco Simulator chưa có dịch vụ Wear Engine vật lý,
-   * hàm này tự động giữ chế độ SIMULATOR_DEMO để bạn kiểm thử giao diện ở Mốc 1.
+   * Kết nối trực tiếp từ HarmonyOS Emulator tới trạm P2P Relay trên máy tính (nhận gói tin thật từ iPhone)
    */
+  private startLanRelayPolling(): void {
+    if (this.relayPollTimerId !== -1) {
+      clearInterval(this.relayPollTimerId);
+    }
+    this.pollRelayOnce();
+    this.relayPollTimerId = setInterval(() => {
+      this.pollRelayOnce();
+    }, 1000);
+  }
+
+  private pollRelayOnce(): void {
+    try {
+      const httpRequest = http.createHttp();
+      httpRequest.request(
+        WearEngineConfig.LAN_RELAY_STATE_URL,
+        {
+          method: http.RequestMethod.GET,
+          connectTimeout: 1500,
+          readTimeout: 1500
+        },
+        (err, data) => {
+          if (!err && data && data.responseCode === 200 && typeof data.result === 'string') {
+            this.applyRelaySnapshot(data.result);
+          }
+          httpRequest.destroy();
+        }
+      );
+    } catch (e) {
+      hilog.warn(0x0000, 'GNavWatch', 'Relay poll skipped: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  private applyRelaySnapshot(rawJson: string): void {
+    try {
+      const snap: Record<string, Object> = JSON.parse(rawJson) as Record<string, Object>;
+      const pktObj = snap['state'] as Record<string, Object>;
+      if (!pktObj) {
+        return;
+      }
+
+      const seq = Number(pktObj['seq'] ?? 0);
+      const ageSec = Number(snap['ageSeconds'] ?? 0);
+
+      // Cập nhật tuyến đường nếu có
+      const rawRoute = snap['routePoints'] as number[][];
+      if (Array.isArray(rawRoute) && rawRoute.length >= 2) {
+        const nextRoute: GeoPoint[] = [];
+        for (let i = 0; i < rawRoute.length; i++) {
+          const pair = rawRoute[i];
+          if (Array.isArray(pair) && pair.length >= 2) {
+            nextRoute.push(new GeoPoint(Number(pair[0]), Number(pair[1])));
+          }
+        }
+        if (nextRoute.length >= 2) {
+          this.currentRoute = nextRoute;
+        }
+      }
+
+      // Cập nhật đường nền xung quanh nếu có
+      const rawRoads = snap['roads'] as Record<string, Object>[];
+      if (Array.isArray(rawRoads) && rawRoads.length > 0) {
+        const nextRoads: RoadSegment[] = [];
+        for (let i = 0; i < rawRoads.length; i++) {
+          const rObj = rawRoads[i];
+          const rName = String(rObj['n'] ?? '');
+          const rClass = Number(rObj['c'] ?? 2);
+          const rPtsRaw = rObj['p'] as number[][];
+          const pts: GeoPoint[] = [];
+          if (Array.isArray(rPtsRaw)) {
+            for (let k = 0; k < rPtsRaw.length; k++) {
+              const pair = rPtsRaw[k];
+              if (Array.isArray(pair) && pair.length >= 2) {
+                pts.push(new GeoPoint(Number(pair[0]), Number(pair[1])));
+              }
+            }
+          }
+          if (pts.length >= 2) {
+            nextRoads.push(new RoadSegment(rName, rClass, pts));
+          }
+        }
+        if (nextRoads.length > 0) {
+          this.currentRoads = nextRoads;
+        }
+      }
+
+      if (seq !== this.lastRelaySeq) {
+        this.lastRelaySeq = seq;
+        this.lastPacketTimeMs = Date.now();
+        this.handleIncomingJson(JSON.stringify(pktObj));
+      } else if (ageSec > 12 && this.connectionMode === 'LIVE_P2P') {
+        this.connectionMode = 'STALE_DISCONNECTED';
+        this.notifyListener();
+      }
+    } catch (e) {
+      hilog.warn(0x0000, 'GNavWatch', 'applyRelaySnapshot error: %{public}s', JSON.stringify(e));
+    }
+  }
+
   private registerWearEngineP2P(): void {
     try {
-      // Khi build trên DevEco Studio có gắn kit @hms.core.wearEngine:
-      // Bỏ comment khối import wearEngine khi chạy trên thiết bị thật có HMS Wear Engine Kit,
-      // hoặc truyền payload từ EntryAbility / P2P Receiver vào handleRawPayloadBytes().
       hilog.info(
         0x0000,
         'GNavWatch',
@@ -87,13 +188,10 @@ export class WearEngineService {
         WearEngineConfig.IOS_PEER_BUNDLE_ID
       );
     } catch (e) {
-      hilog.warn(0x0000, 'GNavWatch', 'Running in Simulator / No WearEngine hardware: %{public}s', JSON.stringify(e));
+      hilog.warn(0x0000, 'GNavWatch', 'Running in Emulator: %{public}s', JSON.stringify(e));
     }
   }
 
-  /**
-   * Nhận mảng byte UTF-8 từ callback của Wear Engine P2P
-   */
   handleRawPayloadBytes(bytes: Uint8Array): void {
     try {
       const decoder = util.TextDecoder.create('utf-8');
@@ -104,9 +202,6 @@ export class WearEngineService {
     }
   }
 
-  /**
-   * Giải mã các gói tin JSON rút gọn: "S" (State), "R" (Route Chunk), "M" (Map Roads), "H" (Heartbeat)
-   */
   handleIncomingJson(jsonStr: string): void {
     try {
       const pkt: Record<string, Object> = JSON.parse(jsonStr) as Record<string, Object>;
@@ -120,7 +215,6 @@ export class WearEngineService {
       this.connectionMode = 'LIVE_P2P';
 
       if (pktType === 'H') {
-        // Heartbeat giữ kết nối sống khi dừng đèn đỏ
         this.notifyListener();
         return;
       }
@@ -170,7 +264,6 @@ export class WearEngineService {
         }
         this.routeChunks.set(idx, chunkPoints);
 
-        // Ghép các mảnh tuyến đường theo thứ tự
         const merged: GeoPoint[] = [];
         for (let c = 0; c < this.expectedRouteChunkTotal; c++) {
           const part = this.routeChunks.get(c);
@@ -241,10 +334,6 @@ export class WearEngineService {
     }
   }
 
-  /**
-   * Bộ canh thời gian (Watchdog): Nếu đang ở LIVE_P2P mà quá 12 giây không có gói tin mới,
-   * tự động chuyển sang STALE_DISCONNECTED để ẩn chỉ dẫn cũ (đáp ứng Mốc 4).
-   */
   private startWatchdog(): void {
     if (this.watchdogTimerId !== -1) {
       clearInterval(this.watchdogTimerId);
@@ -259,8 +348,6 @@ export class WearEngineService {
       }
     }, 2000);
   }
-
-  // --- Các chế độ mô phỏng dành cho Mốc 1 (DevEco Simulator) & Mốc 4 ---
 
   startSimulatorWalk(): void {
     this.stopSimulatorWalk();
