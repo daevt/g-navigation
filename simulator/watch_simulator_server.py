@@ -225,6 +225,45 @@ def process_p2p_packet(pkt: dict) -> None:
             add_log(f"iOS -> Watch [M] Gói đường nền {idx + 1}/{tot} ({len(rds)} đường)")
 
 
+def build_roads_from_steps_and_corridor(pts: list[list[float]], steps: list[dict]) -> list[dict]:
+    """Tạo ngay lập tức mạng lưới đường phố & đường cắt ngang dọc theo lộ trình VIETMAP"""
+    roads: list[dict] = []
+    if len(pts) >= 2:
+        roads.append({"n": "", "c": 1, "p": pts})
+
+    # Tạo các nhánh đường giao cắt tại mỗi nút rẽ của VIETMAP để đồng hồ luôn thấy ngã tư & tên đường
+    for st in steps:
+        loc = st.get("location") or []
+        if len(loc) < 2:
+            continue
+        lat, lng = float(loc[0]), float(loc[1])
+        name = str(st.get("roadName") or "").strip()
+        # Tạo đường cắt ngang qua giao lộ
+        roads.append(
+            {
+                "n": name,
+                "c": 1,
+                "p": [
+                    [round(lat - 0.0009, 6), round(lng - 0.0009, 6)],
+                    [round(lat, 6), round(lng, 6)],
+                    [round(lat + 0.0009, 6), round(lng + 0.0009, 6)],
+                ],
+            }
+        )
+        roads.append(
+            {
+                "n": "",
+                "c": 2,
+                "p": [
+                    [round(lat - 0.0008, 6), round(lng + 0.0008, 6)],
+                    [round(lat, 6), round(lng, 6)],
+                    [round(lat + 0.0008, 6), round(lng - 0.0008, 6)],
+                ],
+            }
+        )
+    return roads
+
+
 def fetch_overpass_roads(lat: float, lng: float, radius: int = 340) -> tuple[str, list[dict]]:
     tile_lat = round(lat * 333)
     tile_lng = round(lng * 333)
@@ -235,44 +274,52 @@ def fetch_overpass_roads(lat: float, lng: float, radius: int = 340) -> tuple[str
     c_lat = tile_lat / 333.0
     c_lng = tile_lng / 333.0
     query = (
-        f'[out:json][timeout:8];'
+        f'[out:json][timeout:4];'
         f'(way["highway"~"^(trunk|primary|secondary|tertiary|residential|unclassified|service)$"]'
         f'(around:{radius},{c_lat:.6f},{c_lng:.6f}););out geom;'
     )
-    try:
-        req = urllib.request.Request(
-            "https://overpass-api.de/api/interpreter",
-            data=f"data={urllib.parse.quote(query)}".encode("utf-8"),
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "GNavigation-iOS-Sim/1.0",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=9) as resp:
-            osm = json.loads(resp.read().decode("utf-8"))
-        roads = []
-        for el in osm.get("elements", []):
-            geom = el.get("geometry") or []
-            if len(geom) < 2:
-                continue
-            hw = str((el.get("tags") or {}).get("highway", ""))
-            r_class = 1 if hw in ("trunk", "primary") else (2 if hw in ("secondary", "tertiary") else 3)
-            name = str((el.get("tags") or {}).get("name", "")).strip()[:32]
-            pts = [[round(g["lat"], 6), round(g["lon"], 6)] for g in geom]
-            if len(pts) > 8:
-                step = max(1, len(pts) // 6)
-                pts = pts[::step] + ([pts[-1]] if pts[-1] != pts[::step][-1] else [])
-            roads.append({"n": name, "c": r_class, "p": pts})
-            if len(roads) >= 42:
-                break
-        if roads:
-            ROAD_TILE_CACHE[tile_id] = roads
-            return tile_id, roads
-    except Exception as e:
-        add_log(f"Overpass fallback: {e}")
+    for endpoint in (
+        "https://overpass.private.coffee/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+    ):
+        try:
+            req = urllib.request.Request(
+                endpoint,
+                data=f"data={urllib.parse.quote(query)}".encode("utf-8"),
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "GNavigation-iOS-Sim/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                osm = json.loads(resp.read().decode("utf-8"))
+            roads = []
+            for el in osm.get("elements", []):
+                geom = el.get("geometry") or []
+                if len(geom) < 2:
+                    continue
+                hw = str((el.get("tags") or {}).get("highway", ""))
+                r_class = 1 if hw in ("trunk", "primary") else (2 if hw in ("secondary", "tertiary") else 3)
+                name = str((el.get("tags") or {}).get("name", "")).strip()[:32]
+                pts = [[round(g["lat"], 6), round(g["lon"], 6)] for g in geom]
+                if len(pts) > 8:
+                    step = max(1, len(pts) // 6)
+                    pts = pts[::step] + ([pts[-1]] if pts[-1] != pts[::step][-1] else [])
+                roads.append({"n": name, "c": r_class, "p": pts})
+                if len(roads) >= 48:
+                    break
+            if roads:
+                ROAD_TILE_CACHE[tile_id] = roads
+                return tile_id, roads
+        except Exception:
+            continue
 
     with STATE_LOCK:
-        return tile_id, WATCH_HUB["roads"]
+        fallback = build_roads_from_steps_and_corridor(
+            WATCH_HUB.get("routePoints", []), WATCH_HUB.get("steps", [])
+        )
+        return tile_id, (fallback if fallback else WATCH_HUB["roads"])
 
 
 def decode_polyline5(encoded: str) -> list[list[float]]:
@@ -368,6 +415,10 @@ def fetch_osrm_route(origin_lat: float, origin_lng: float, dest_lat: float, dest
                 add_log(
                     f"✅ VIETMAP Route (motorcycle): {int(round(path.get('distance', 0)))}m, {len(steps)} bước rẽ"
                 )
+                with STATE_LOCK:
+                    WATCH_HUB["steps"] = steps
+                    WATCH_HUB["routePoints"] = pts
+                    WATCH_HUB["roads"] = build_roads_from_steps_and_corridor(pts, steps)
                 return {
                     "routeId": f"vm_{int(time.time())}",
                     "provider": "vietmap",
@@ -612,7 +663,11 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     font-size: 11px;
   }
   .search-item:hover { background: #3a3a3c; }
-  #iosMap { flex: 1; width: 100%; min-height: 220px; z-index: 1; }
+  #iosMap { flex: 1; width: 100%; min-height: 220px; z-index: 1; background: #0d1520; }
+  /* Chuyển gạch bản đồ OpenStreetMap chuẩn sang giao diện Dark Navigation sắc nét, không bao giờ đòi API Key */
+  #iosMap .leaflet-tile-pane {
+    filter: invert(92%) hue-rotate(185deg) brightness(95%) contrast(92%);
+  }
   .nav-sheet {
     background: var(--ios-card);
     border-top: 1px solid #2c2c2e;
@@ -755,8 +810,24 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     overflow: hidden;
     border: 2px solid #05070a;
   }
-  #watchCanvas { width: 100%; height: 100%; display: block; }
+  #watchMapBg {
+    position: absolute;
+    width: 520px;
+    height: 520px;
+    left: 50%;
+    top: 67%;
+    margin-left: -260px;
+    margin-top: -260px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.72;
+  }
+  #watchMapBg .leaflet-tile-pane {
+    filter: invert(93%) hue-rotate(185deg) brightness(88%) contrast(95%);
+  }
+  #watchCanvas { position: relative; width: 100%; height: 100%; display: block; z-index: 2; }
   .w-turn-banner {
+    z-index: 5;
     position: absolute;
     top: 14px;
     left: 50%;
@@ -937,6 +1008,7 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
       <div class="watch-crown"></div>
       <div class="watch-side-btn"></div>
       <div class="watch-screen">
+        <div id="watchMapBg"></div>
         <canvas id="watchCanvas" width="306" height="366"></canvas>
 
         <!-- Thẻ báo rẽ trên đồng hồ -->
@@ -953,8 +1025,7 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
           </div>
         </div>
 
-        <!-- Thanh tốc độ & ETA dưới cùng -->
-        <div class="w-bottom-bar">
+      <div class="w-bottom-bar" style="z-index:5">
           <div style="text-align:center">
             <div style="font-size:15px;font-weight:800;color:#00e5ff;line-height:1" id="wSpd">32</div>
             <div style="font-size:8px;color:#78909c">km/h</div>
@@ -984,7 +1055,7 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
-let map, riderMarker, destMarker, routeLine;
+let map, watchMap, riderMarker, destMarker, routeLine;
 let currentRoute = [];
 let currentSteps = [];
 let routeIdx = 0;
@@ -1005,9 +1076,21 @@ function switchTab(name) {
 
 function initMap() {
   map = L.map('iosMap', { zoomControl: false }).setView([10.77584, 106.70042], 16);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19
   }).addTo(map);
+
+  watchMap = L.map('watchMapBg', {
+    zoomControl: false,
+    attributionControl: false,
+    dragging: false,
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    keyboard: false
+  }).setView([10.77584, 106.70042], 17);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19
+  }).addTo(watchMap);
 
   const riderIcon = L.divIcon({
     html: '<div style="width:20px;height:20px;border-radius:50%;background:#00e5ff;border:3px solid #fff;box-shadow:0 0 12px #00e5ff;"></div>',
@@ -1388,16 +1471,20 @@ function renderWatchFit4Pro() {
     setTimeout(() => wc.classList.remove('vibrating'), 900);
   }
 
+  if (watchMap) {
+    watchMap.setView([s.lat, s.lng], 17, { animate: false });
+    const bgEl = document.getElementById('watchMapBg');
+    bgEl.style.transform = `rotate(${-s.hdg}deg)`;
+  }
+
   const canvas = document.getElementById('watchCanvas');
   const c = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   const ax = w * 0.5, ay = h * 0.67;
 
   c.clearRect(0, 0, w, h);
-  c.fillStyle = '#0A0E14';
-  c.fillRect(0, 0, w, h);
 
-  c.strokeStyle = '#142030';
+  c.strokeStyle = 'rgba(0, 229, 255, 0.16)';
   c.lineWidth = 1;
   c.beginPath(); c.arc(ax, ay, 100 / 1.65, 0, Math.PI * 2); c.stroke();
 
