@@ -64,7 +64,7 @@ struct Index {
           navState: this.navState,
           isStale: this.connectionMode === 'STALE_DISCONNECTED'
         })
-          .margin({ top: 10 })
+          .margin({ top: 20 })
 
         // Khoảng trống ở giữa dành cho bản đồ + Nút Zoom nhỏ bên phải
         Row() {
@@ -106,7 +106,7 @@ struct Index {
             connectionMode: this.connectionMode
           })
         }
-        .margin({ bottom: 8 })
+        .margin({ bottom: 16 })
         .onClick(() => {
           this.showTestDrawer = !this.showTestDrawer;
         })

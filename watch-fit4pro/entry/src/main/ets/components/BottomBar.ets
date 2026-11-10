@@ -83,7 +83,7 @@ export struct BottomBar {
       }
       .alignItems(VerticalAlign.Center)
     }
-    .width('88%')
+    .width('74%')
     .padding({ left: 12, right: 12, top: 6, bottom: 6 })
     .backgroundColor('#D9101B28')
     .borderRadius(20)
