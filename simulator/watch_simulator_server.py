@@ -10,6 +10,7 @@ import json
 import math
 import os
 import socket
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -17,6 +18,49 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8787
+
+# Bộ nhớ đệm cảm biến vị trí gốc của Windows (System.Device.Location.GeoCoordinateWatcher)
+WINDOWS_GPS_CACHE = {
+    "lat": 21.001021,
+    "lng": 105.856575,
+    "acc": 45,
+    "updatedAt": 0.0,
+}
+
+
+def refresh_windows_native_gps() -> dict:
+    """Đọc trực tiếp cảm biến vị trí Wi-Fi/GPS gốc của Windows 11 (GeoCoordinateWatcher)"""
+    now = time.time()
+    if now - WINDOWS_GPS_CACHE["updatedAt"] < 15.0:
+        return WINDOWS_GPS_CACHE
+    try:
+        ps_cmd = (
+            "Add-Type -AssemblyName System.Device; "
+            "$w = New-Object System.Device.Location.GeoCoordinateWatcher([System.Device.Location.GeoPositionAccuracy]::High); "
+            "$w.Start(); "
+            "for($i=0;$i -lt 8;$i++){ if($w.Status -eq 'Ready' -and -not $w.Position.Location.IsUnknown){break}; Start-Sleep -Milliseconds 300 }; "
+            "$loc = $w.Position.Location; "
+            "if(-not $loc.IsUnknown){ Write-Output \"$($loc.Latitude),$($loc.Longitude),$($loc.HorizontalAccuracy)\" }; "
+            "$w.Stop()"
+        )
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+        ).decode("utf-8").strip()
+        if "," in out:
+            parts = out.split(",")
+            lat = float(parts[0])
+            lng = float(parts[1])
+            acc = int(round(float(parts[2]))) if len(parts) > 2 else 50
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                WINDOWS_GPS_CACHE["lat"] = round(lat, 6)
+                WINDOWS_GPS_CACHE["lng"] = round(lng, 6)
+                WINDOWS_GPS_CACHE["acc"] = max(10, acc)
+                WINDOWS_GPS_CACHE["updatedAt"] = now
+    except Exception:
+        pass
+    return WINDOWS_GPS_CACHE
 
 
 def load_vietmap_api_key() -> str:
@@ -62,15 +106,15 @@ WATCH_HUB = {
         "t": "S",
         "seq": 1,
         "ts": int(time.time()),
-        "lat": 10.775840,
-        "lng": 106.700420,
-        "hdg": 42,
-        "spd": 32,
-        "mType": "TURN_RIGHT",
-        "mDist": 85,
-        "road": "Nguyễn Huệ",
-        "eta": "14:25",
-        "rem": 1250,
+        "lat": 21.001021,
+        "lng": 105.856575,
+        "hdg": 0,
+        "spd": 0,
+        "mType": "STRAIGHT",
+        "mDist": 65,
+        "road": "Thanh Nhàn",
+        "eta": "15:05",
+        "rem": 1450,
         "vib": 0,
         "reroute": False,
     },
@@ -948,31 +992,34 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
 
           <div class="nav-sheet">
             <div style="font-size:11px;color:#64d2ff;font-weight:600;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="currentAddressLine">
-              📍 Vị trí hiện tại: Đang xác định địa chỉ...
+              📍 Vị trí hiện tại: Đang lấy từ cảm biến Windows GPS...
             </div>
             <div class="quick-routes">
-              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 10.7725,106.6980)">🛵 Từ GPS của tôi → Chợ Bến Thành</span>
-              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 10.7770,106.6953)">🛵 Từ GPS của tôi → Dinh Độc Lập</span>
-              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 21.0285,105.8542)">🛵 Từ GPS của tôi → Hồ Gươm</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 21.0045,105.8431)">🧭 Chỉ đường → ĐH Bách Khoa HN</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 21.0285,105.8542)">🧭 Chỉ đường → Hồ Gươm</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 20.9958,105.8675)">🧭 Chỉ đường → Times City</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 21.0368,105.8347)">🧭 Chỉ đường → Lăng Bác</span>
             </div>
 
             <div class="turn-preview">
               <div>
-                <div class="turn-title" id="iosTurnDist">Đang lấy vị trí GPS thật...</div>
-                <div class="turn-sub" id="iosTurnRoad">Hãy chọn điểm đến trên bản đồ hoặc ô tìm kiếm</div>
+                <div class="turn-title" id="iosTurnDist">Sẵn sàng chỉ đường</div>
+                <div class="turn-sub" id="iosTurnRoad">Chọn điểm đến hoặc bấm Chỉ đường bên dưới</div>
               </div>
               <div style="text-align:right">
                 <div style="font-size:14px;font-weight:700;color:var(--ios-cyan)" id="iosSpeed">0 km/h</div>
-                <div class="turn-sub" id="iosEta">GPS: Đang định vị...</div>
+                <div class="turn-sub" id="iosEta">GPS: Hà Nội</div>
               </div>
             </div>
 
-            <div style="display:flex;gap:6px;">
-              <button class="ios-btn green" style="flex:1" id="gpsBtn" onclick="locateRealGPS(true)">📍 Định vị GPS Thật hiện tại</button>
-              <button class="ios-btn orange" onclick="lockIphoneScreen()">🔒 Khóa màn hình</button>
+            <div style="display:flex;gap:5px;">
+              <button class="ios-btn green" style="flex:1" id="driveBtn" onclick="toggleDrive()">🧭 Bắt đầu chỉ đường (Chạy xe)</button>
+              <button class="ios-btn gray" onclick="stepOnce()" title="Nhích 1 bước dọc lộ trình">⏭ +1 Bước</button>
+              <button class="ios-btn" onclick="locateRealGPS(true)" title="Lấy lại GPS hiện tại">📍 GPS</button>
+              <button class="ios-btn orange" onclick="lockIphoneScreen()" title="Khóa màn hình iPhone">🔒</button>
             </div>
             <div style="font-size:10px;color:var(--ios-sub);margin-top:5px;" id="gpsStatusLine">
-              🛰️ Đang kết nối cảm biến GPS thật (HTML5 Geolocation / CoreLocation)... Nhấp chuột lên bản đồ để dẫn đường từ vị trí GPS thật của bạn!
+              🛰️ Đã kết nối cảm biến vị trí gốc của Windows. Nhấp lên bản đồ để chọn đích hoặc bấm <strong>Bắt đầu chỉ đường</strong>!
             </div>
           </div>
         </div>
@@ -1084,17 +1131,19 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
 let map, watchMap, riderMarker, destMarker, routeLine, accuracyCircle;
 let currentRoute = [];
 let currentSteps = [];
+let routeIdx = 0;
+let driveTimer = null;
 let seqCounter = 10;
 let btConnected = true;
 let loadedTileKey = "";
 let hubData = null;
 let lastVibSeq = -1;
 let gpsWatchId = null;
-let realGpsLat = 10.775840;
-let realGpsLng = 106.700420;
+let realGpsLat = 21.001021;
+let realGpsLng = 105.856575;
 let realGpsHeading = 0;
 let realGpsSpeedKmh = 0;
-let realGpsAccuracy = 0;
+let realGpsAccuracy = 45;
 let hasFirstGpsFix = false;
 
 function switchTab(name) {
@@ -1181,39 +1230,38 @@ function startRealGpsTracking() {
   );
 }
 
-function locateRealGPS(recenter = true) {
-  if (!navigator.geolocation) {
-    fallbackIpLocation();
-    return;
-  }
-  navigator.geolocation.getCurrentPosition(
-    async (pos) => {
+async function locateRealGPS(recenter = true) {
+  // Ưu tiên 1: Lấy từ cảm biến vị trí gốc của Windows (System.Device.Location.GeoCoordinateWatcher)
+  try {
+    const res = await fetch('/api/native-gps');
+    const winGps = await res.json();
+    if (winGps && winGps.lat && winGps.lng) {
       hasFirstGpsFix = true;
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      const acc = Math.round(pos.coords.accuracy || 10);
-      const spd = pos.coords.speed && pos.coords.speed > 0 ? Math.round(pos.coords.speed * 3.6) : 0;
-      const hdg = pos.coords.heading && pos.coords.heading >= 0 ? Math.round(pos.coords.heading) : realGpsHeading;
-      await onRealGpsUpdate(lat, lng, spd, hdg, acc, recenter);
-    },
-    () => {
-      fallbackIpLocation();
-    },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
-  );
+      await onRealGpsUpdate(winGps.lat, winGps.lng, 0, realGpsHeading, winGps.acc || 45, recenter);
+      return;
+    }
+  } catch (e) {}
+
+  // Ưu tiên 2: HTML5 Geolocation (dành cho iPhone Safari/WebKit)
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        hasFirstGpsFix = true;
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const acc = Math.round(pos.coords.accuracy || 15);
+        const spd = pos.coords.speed && pos.coords.speed > 0 ? Math.round(pos.coords.speed * 3.6) : 0;
+        const hdg = pos.coords.heading && pos.coords.heading >= 0 ? Math.round(pos.coords.heading) : realGpsHeading;
+        await onRealGpsUpdate(lat, lng, spd, hdg, acc, recenter);
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 6000 }
+    );
+  }
 }
 
 async function fallbackIpLocation() {
-  try {
-    const res = await fetch('https://get.geojs.io/v1/ip/geo.json');
-    const data = await res.json();
-    if (data.latitude && data.longitude) {
-      const lat = parseFloat(data.latitude);
-      const lng = parseFloat(data.longitude);
-      hasFirstGpsFix = true;
-      await onRealGpsUpdate(lat, lng, 0, 0, 50, true);
-    }
-  } catch (e) {}
+  await locateRealGPS(true);
 }
 
 let lastReverseTile = "";
@@ -1589,10 +1637,38 @@ function toggleDrive() {
   }
 }
 
+async function stepOnce() {
+  if (currentRoute.length < 2) {
+    await startRealRoute(realGpsLat, realGpsLng, 21.0045, 105.8431);
+  }
+  if (currentRoute.length < 2) return;
+  routeIdx = (routeIdx + 1) % currentRoute.length;
+  const pt = currentRoute[routeIdx];
+  await onRealGpsUpdate(pt[0], pt[1], 34, realGpsHeading, 8, false);
+}
+
+async function toggleDrive() {
+  const btn = document.getElementById('driveBtn');
+  if (driveTimer) {
+    clearInterval(driveTimer);
+    driveTimer = null;
+    btn.innerText = '🧭 Bắt đầu chỉ đường (Chạy xe)';
+    btn.className = 'ios-btn green';
+  } else {
+    if (currentRoute.length < 2) {
+      await startRealRoute(realGpsLat, realGpsLng, 21.0045, 105.8431);
+    }
+    stepOnce();
+    driveTimer = setInterval(stepOnce, 1200);
+    btn.innerText = '⏸ Đang chỉ đường (Bấm để dừng)';
+    btn.className = 'ios-btn red';
+  }
+}
+
 async function searchPlace() {
   const q = document.getElementById('searchInput').value.trim();
   if (!q) return;
-  const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&lat=${realGpsLat}&lng=${realGpsLng}`);
   const data = await res.json();
   const box = document.getElementById('searchResults');
   if (!data.results || data.results.length === 0) {
@@ -1600,12 +1676,27 @@ async function searchPlace() {
     return;
   }
   box.style.display = 'block';
-  box.innerHTML = data.results.map(r => `
-    <div class="search-item" onclick="selectSearchResult(${r.lat}, ${r.lng}, '${r.name.replace(/'/g, "")}')">
-      <strong>${r.name}</strong> <span style="color:#30d158">[${data.provider || 'vietmap'}]</span><br/>
-      <span style="color:#8e8e93">${r.address}</span>
-    </div>
-  `).join('');
+  box.innerHTML = data.results.map(r => {
+    const safeName = r.name.replace(/'/g, "");
+    return `
+      <div class="search-item" style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+        <div style="flex:1;min-width:0;" onclick="selectSearchResult(${r.lat}, ${r.lng}, '${safeName}')">
+          <strong>${r.name}</strong> <span style="color:#30d158">[${data.provider || 'vietmap'}]</span><br/>
+          <span style="color:#8e8e93">${r.address}</span>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <button class="ios-btn green" style="padding:5px 8px;font-size:10px" onclick="selectSearchResult(${r.lat}, ${r.lng}, '${safeName}')">🧭 Chỉ đường</button>
+          <button class="ios-btn gray" style="padding:5px 7px;font-size:10px" onclick="setAsMyCurrentGps(${r.lat}, ${r.lng}, '${safeName}')" title="Đặt làm vị trí hiện tại của tôi">📌 Vị trí tôi</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function setAsMyCurrentGps(lat, lng, name) {
+  document.getElementById('searchResults').style.display = 'none';
+  lastReverseTile = "";
+  await onRealGpsUpdate(lat, lng, 0, 0, 5, true);
 }
 
 async function selectSearchResult(lat, lng, name) {
@@ -1887,6 +1978,11 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
                 self._send_json(route)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+            return
+
+        if path == "/api/native-gps":
+            gps = refresh_windows_native_gps()
+            self._send_json(gps)
             return
 
         if path == "/api/reverse":
