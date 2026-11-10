@@ -1,0 +1,21 @@
+# Node / Cloudflare Worker
+node_modules/
+.wrangler/
+.dev.vars
+.env
+
+# HarmonyOS / DevEco Studio
+watch-fit4pro/.hvigor/
+watch-fit4pro/oh_modules/
+watch-fit4pro/build/
+watch-fit4pro/entry/build/
+watch-fit4pro/entry/oh_modules/
+watch-fit4pro/local.properties
+
+# iOS / Xcode / Codemagic
+ios-app/build/
+ios-app/DerivedData/
+ios-app/*.xcodeproj/project.xcworkspace/xcuserdata/
+ios-app/*.xcodeproj/xcuserdata/
+*.ipa
+.DS_Store

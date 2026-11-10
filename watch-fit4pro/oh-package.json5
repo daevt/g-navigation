@@ -1,0 +1,13 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "g-navigation-watch",
+  "version": "1.0.0",
+  "description": "G Navigation Watch App for Huawei Watch Fit 4 Pro",
+  "main": "",
+  "author": "",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.18"
+  }
+}

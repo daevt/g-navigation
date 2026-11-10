@@ -1,0 +1,14 @@
+name = "g-navigation-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Biến môi trường không nhạy cảm
+[vars]
+DEFAULT_VEHICLE = "motorcycle"
+ALLOW_OSM_FALLBACK = "true"
+
+# Lưu ý bảo mật:
+# Không ghi trực tiếp VIETMAP_API_KEY vào file này nếu đẩy lên Git công khai.
+# Hãy chạy lệnh sau trong thư mục backend-worker:
+#   npx wrangler secret put VIETMAP_API_KEY
+#   npx wrangler secret put CLIENT_TOKEN

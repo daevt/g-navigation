@@ -1,0 +1,44 @@
+workflows:
+  ios-sideloadly-free:
+    name: G Navigation - Build IPA for Sideloadly (0 USD)
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Cài đặt XcodeGen (nếu chưa có) & Tạo project Xcode từ project.yml
+        script: |
+          cd ios-app
+          if ! command -v xcodegen &> /dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+
+      - name: Build ứng dụng cho thiết bị iPhone thật (arm64, không cần chứng chỉ trả phí)
+        script: |
+          cd ios-app
+          xcodebuild \
+            -project GNavigation.xcodeproj \
+            -scheme GNavigation \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+      - name: Đóng gói file GNavigation-unsigned.ipa cho Sideloadly trên Windows
+        script: |
+          cd ios-app
+          mkdir -p build/ipa/Payload
+          APP_PATH=$(find build/DerivedData -name "GNavigation.app" -type d | head -n 1)
+          echo "Found built .app at: $APP_PATH"
+          cp -R "$APP_PATH" build/ipa/Payload/
+          cd build/ipa
+          zip -r9 GNavigation-unsigned.ipa Payload
+          ls -lh GNavigation-unsigned.ipa
+    artifacts:
+      - ios-app/build/ipa/GNavigation-unsigned.ipa

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>vi</string>
+	<key>CFBundleDisplayName</key>
+	<string>G Navigation</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<!-- Quyền vị trí chạy nền cả khi khóa màn hình iPhone (Mốc 2 & Mốc 4) -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>G Navigation cần vị trí của bạn để dẫn đường xe máy và gửi chỉ dẫn rẽ sang đồng hồ Huawei Watch Fit 4 Pro.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>G Navigation cần quyền vị trí "Luôn luôn" để tiếp tục gửi bản đồ và báo rẽ sang đồng hồ ngay cả khi bạn khóa màn hình iPhone bỏ vào túi.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>G Navigation dùng kết nối với Huawei Health / Wear Engine để truyền dữ liệu dẫn đường sang Fit 4 Pro.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>bluetooth-central</string>
+		<string>processing</string>
+	</array>
+	<!-- Cho phép gọi sang Huawei Health để xin quyền Wear Engine trên iOS -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>huaweihealth</string>
+		<string>huaweischeme</string>
+		<string>hwhealth</string>
+	</array>
+	<!-- Callback URL Scheme để Huawei Health trả kết quả xác thực về lại G Navigation -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.gnavigation.ios.callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>gnavigation</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

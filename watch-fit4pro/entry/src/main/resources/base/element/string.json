@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "G Navigation Watch Module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Bản đồ và chỉ dẫn xe máy từ iPhone qua Wear Engine P2P"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "G Nav"
+    }
+  ]
+}
