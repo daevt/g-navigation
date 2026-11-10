@@ -5,9 +5,9 @@ import Foundation
 struct AppConfig {
     private static let defaults = UserDefaults.standard
 
-    /// URL của Cloudflare Worker (Mốc 3)
+    /// URL của Cloudflare Worker hoặc máy chủ VIETMAP LAN Relay
     static var workerBaseURL: String {
-        get { defaults.string(forKey: "cfg_worker_url") ?? "https://g-navigation-worker.YOUR-SUBDOMAIN.workers.dev" }
+        get { defaults.string(forKey: "cfg_worker_url") ?? "http://192.168.102.80:8787" }
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "cfg_worker_url") }
     }
 
