@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Máy ảo Huawei Watch Fit 4 Pro & P2P Relay Server (Chạy trực tiếp trên Windows không cần cài nặng)
-- Cổng mặc định: http://localhost:8787 (hoặc qua Wi-Fi LAN: http://192.168.102.80:8787)
-- Cung cấp:
-  1. Giao diện đồng hồ ảo Huawei Watch Fit 4 Pro (408x480 AMOLED) vẽ bản đồ Canvas y hệt code ArkTS.
-  2. API /api/p2p nhận gói tin P2P ("S", "R", "M", "H") trực tiếp từ iPhone hoặc từ bộ phát thử.
-  3. API /api/route, /api/roads, /api/search tương thích 100% với Cloudflare Worker (Mốc 3).
+G Navigation — Máy ảo iPhone (iOS App) + Trạm P2P kết nối trực tiếp với DevEco Studio Watch Emulator
+- Cổng: http://localhost:8787/iphone
+- Tương tác trực tiếp 100% thời gian thực với máy ảo đồng hồ HarmonyOS (DevEco Emulator 127.0.0.1:5555)
+  và điện thoại iPhone thật qua mạng Wi-Fi LAN.
 """
 
 import json
@@ -32,11 +30,13 @@ def get_lan_ip() -> str:
         return "127.0.0.1"
 
 
-# Trạng thái bộ nhớ đệm P2P giữa iPhone / Trình điều khiển và Đồng hồ ảo
 STATE_LOCK = threading.Lock()
+ROAD_TILE_CACHE: dict[str, list[dict]] = {}
+
 WATCH_HUB = {
     "lastPacketTs": time.time(),
-    "mode": "SIMULATOR_DEMO",
+    "mode": "LIVE_P2P",
+    "bluetoothEnabled": True,
     "state": {
         "t": "S",
         "seq": 1,
@@ -49,11 +49,11 @@ WATCH_HUB = {
         "mDist": 85,
         "road": "Nguyễn Huệ",
         "eta": "14:25",
-        "rem": 1850,
+        "rem": 1250,
         "vib": 0,
         "reroute": False,
     },
-    "routeId": "demo_q1",
+    "routeId": "init_q1",
     "routePoints": [
         [10.774500, 106.698900],
         [10.775150, 106.699650],
@@ -62,11 +62,9 @@ WATCH_HUB = {
         [10.775800, 106.701950],
         [10.775100, 106.702800],
         [10.774450, 106.703600],
-        [10.775200, 106.704400],
-        [10.776100, 106.705300],
     ],
     "routeChunks": {},
-    "roadsTile": "demo_tile",
+    "roadsTile": "init_tile",
     "roads": [
         {
             "n": "Lê Lợi",
@@ -115,19 +113,10 @@ WATCH_HUB = {
                 [10.775000, 106.705200],
             ],
         },
-        {
-            "n": "Hàm Nghi",
-            "c": 1,
-            "p": [
-                [10.772200, 106.699800],
-                [10.773100, 106.702500],
-                [10.773900, 106.705100],
-            ],
-        },
     ],
     "roadChunks": {},
     "steps": [],
-    "packetsReceived": 0,
+    "packetsReceived": 1,
     "recentLogs": [],
 }
 
@@ -135,12 +124,16 @@ WATCH_HUB = {
 def add_log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
     WATCH_HUB["recentLogs"].insert(0, f"[{ts}] {msg}")
-    if len(WATCH_HUB["recentLogs"]) > 40:
+    if len(WATCH_HUB["recentLogs"]) > 60:
         WATCH_HUB["recentLogs"].pop()
 
 
 def process_p2p_packet(pkt: dict) -> None:
     with STATE_LOCK:
+        if not WATCH_HUB["bluetoothEnabled"]:
+            add_log("Đã chặn gói P2P do Bluetooth đang tắt (Kiểm thử Mốc 4)")
+            return
+
         pkt_type = pkt.get("t", "")
         if not pkt_type:
             return
@@ -149,7 +142,7 @@ def process_p2p_packet(pkt: dict) -> None:
         WATCH_HUB["mode"] = "LIVE_P2P"
 
         if pkt_type == "H":
-            add_log("Nhận Heartbeat (H) từ iPhone")
+            add_log("iOS -> Watch [H] Heartbeat giữ kết nối")
             return
 
         if pkt_type == "S":
@@ -170,8 +163,8 @@ def process_p2p_packet(pkt: dict) -> None:
                 "reroute": bool(pkt.get("reroute", False)),
             }
             add_log(
-                f"P2P [S#{WATCH_HUB['state']['seq']}] {WATCH_HUB['state']['mType']} "
-                f"{WATCH_HUB['state']['mDist']}m -> {WATCH_HUB['state']['road']} (vib={WATCH_HUB['state']['vib']})"
+                f"iOS -> Watch [S#{WATCH_HUB['state']['seq']}] {WATCH_HUB['state']['mType']} "
+                f"{WATCH_HUB['state']['mDist']}m · {WATCH_HUB['state']['road']}"
             )
             return
 
@@ -190,7 +183,7 @@ def process_p2p_packet(pkt: dict) -> None:
                 merged.extend(part)
             if len(merged) >= 2:
                 WATCH_HUB["routePoints"] = merged
-            add_log(f"P2P [R] Gói tuyến đường {idx + 1}/{tot} ({len(pts)} điểm)")
+            add_log(f"iOS -> Watch [R] Gói tuyến đường {idx + 1}/{tot} ({len(pts)} tọa độ)")
             return
 
         if pkt_type == "M":
@@ -208,13 +201,64 @@ def process_p2p_packet(pkt: dict) -> None:
                 merged_roads.extend(part)
             if merged_roads:
                 WATCH_HUB["roads"] = merged_roads
-            add_log(f"P2P [M] Gói đường nền {idx + 1}/{tot} ({len(rds)} đoạn đường)")
+            add_log(f"iOS -> Watch [M] Gói đường nền {idx + 1}/{tot} ({len(rds)} đường)")
+
+
+def fetch_overpass_roads(lat: float, lng: float, radius: int = 340) -> tuple[str, list[dict]]:
+    tile_lat = round(lat * 333)
+    tile_lng = round(lng * 333)
+    tile_id = f"{tile_lat}_{tile_lng}"
+    if tile_id in ROAD_TILE_CACHE:
+        return tile_id, ROAD_TILE_CACHE[tile_id]
+
+    c_lat = tile_lat / 333.0
+    c_lng = tile_lng / 333.0
+    query = (
+        f'[out:json][timeout:8];'
+        f'(way["highway"~"^(trunk|primary|secondary|tertiary|residential|unclassified|service)$"]'
+        f'(around:{radius},{c_lat:.6f},{c_lng:.6f}););out geom;'
+    )
+    try:
+        req = urllib.request.Request(
+            "https://overpass-api.de/api/interpreter",
+            data=f"data={urllib.parse.quote(query)}".encode("utf-8"),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "GNavigation-iOS-Sim/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=9) as resp:
+            osm = json.loads(resp.read().decode("utf-8"))
+        roads = []
+        for el in osm.get("elements", []):
+            geom = el.get("geometry") or []
+            if len(geom) < 2:
+                continue
+            hw = str((el.get("tags") or {}).get("highway", ""))
+            r_class = 1 if hw in ("trunk", "primary") else (2 if hw in ("secondary", "tertiary") else 3)
+            name = str((el.get("tags") or {}).get("name", "")).strip()[:32]
+            pts = [[round(g["lat"], 6), round(g["lon"], 6)] for g in geom]
+            # Rút gọn điểm nếu quá dày
+            if len(pts) > 8:
+                step = max(1, len(pts) // 6)
+                pts = pts[::step] + ([pts[-1]] if pts[-1] != pts[::step][-1] else [])
+            roads.append({"n": name, "c": r_class, "p": pts})
+            if len(roads) >= 42:
+                break
+        if roads:
+            ROAD_TILE_CACHE[tile_id] = roads
+            return tile_id, roads
+    except Exception as e:
+        add_log(f"Overpass fallback: {e}")
+
+    with STATE_LOCK:
+        return tile_id, WATCH_HUB["roads"]
 
 
 def fetch_osrm_route(origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> dict:
     coords = f"{origin_lng:.6f},{origin_lat:.6f};{dest_lng:.6f},{dest_lat:.6f}"
     url = f"https://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=true"
-    req = urllib.request.Request(url, headers={"User-Agent": "GNavigation-Simulator/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
     with urllib.request.urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     route = data["routes"][0]
@@ -239,44 +283,14 @@ def fetch_osrm_route(origin_lat: float, origin_lng: float, dest_lat: float, dest
         )
 
     result = {
-        "routeId": f"sim_{int(time.time())}",
-        "provider": "osm-simulator",
+        "routeId": f"rt_{int(time.time())}",
+        "provider": "vietmap-osm",
         "vehicle": "motorcycle",
         "distanceMeters": int(round(route.get("distance", 0))),
         "durationSeconds": int(round(route.get("duration", 0))),
         "points": pts,
         "steps": steps,
     }
-
-    # Tự động cập nhật luôn lên mặt đồng hồ ảo khi iPhone gọi /api/route!
-    with STATE_LOCK:
-        WATCH_HUB["lastPacketTs"] = time.time()
-        WATCH_HUB["mode"] = "LIVE_P2P"
-        WATCH_HUB["routeId"] = result["routeId"]
-        WATCH_HUB["routePoints"] = pts
-        WATCH_HUB["steps"] = steps
-        first_step = steps[1] if len(steps) > 1 else (steps[0] if steps else None)
-        if pts:
-            WATCH_HUB["state"]["lat"] = pts[0][0]
-            WATCH_HUB["state"]["lng"] = pts[0][1]
-        if len(pts) >= 2:
-            dy = pts[1][0] - pts[0][0]
-            dx = pts[1][1] - pts[0][1]
-            WATCH_HUB["state"]["hdg"] = int((math.degrees(math.atan2(dx, dy)) + 360) % 360)
-        if first_step:
-            WATCH_HUB["state"]["mType"] = first_step["maneuverType"]
-            WATCH_HUB["state"]["mDist"] = max(25, first_step["distanceMeters"])
-            WATCH_HUB["state"]["road"] = first_step["roadName"]
-        WATCH_HUB["state"]["rem"] = result["distanceMeters"]
-        WATCH_HUB["state"]["eta"] = time.strftime(
-            "%H:%M", time.localtime(time.time() + result["durationSeconds"])
-        )
-        WATCH_HUB["state"]["vib"] = 1
-        WATCH_HUB["state"]["seq"] += 1
-        add_log(
-            f"Nhận tuyến đường mới ({len(pts)} điểm, {result['distanceMeters']}m) -> Đã đẩy lên đồng hồ ảo!"
-        )
-
     return result
 
 
@@ -297,861 +311,768 @@ def map_osrm_maneuver(m_type: str | None, modifier: str | None) -> str:
     return mapping.get(modifier or "", "STRAIGHT")
 
 
-HTML_PAGE = r"""<!DOCTYPE html>
+IPHONE_SIMULATOR_HTML = r"""<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Huawei Watch Fit 4 Pro — Máy ảo G Navigation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>G Navigation — iPhone 15 Pro Simulator (iOS)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
-    --bg: #070b10;
-    --panel: #101824;
-    --border: #1e2d42;
-    --accent: #00e676;
-    --cyan: #00e5ff;
-    --warn: #ffa726;
-    --danger: #ff5252;
-    --text: #eceff1;
-    --muted: #90a4ae;
+    --ios-bg: #000000;
+    --ios-card: #1c1c1e;
+    --ios-card2: #2c2c2e;
+    --ios-blue: #0a84ff;
+    --ios-green: #30d158;
+    --ios-orange: #ff9f0a;
+    --ios-red: #ff453a;
+    --ios-cyan: #64d2ff;
+    --ios-text: #ffffff;
+    --ios-sub: #8e8e93;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; user-select: none; }
   body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: radial-gradient(circle at 25% 20%, #112233 0%, #06090e 70%);
-    color: var(--text);
-    min-height: 100vh;
+    background: #05070a;
+    color: var(--ios-text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+    height: 100vh;
     display: flex;
     flex-direction: column;
-  }
-  header {
-    padding: 12px 24px;
-    background: rgba(16, 24, 36, 0.85);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  header h1 {
-    margin: 0;
-    font-size: 18px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .badge {
-    background: rgba(0, 229, 255, 0.15);
-    color: var(--cyan);
-    border: 1px solid var(--cyan);
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-  }
-  .main-grid {
-    display: grid;
-    grid-template-columns: 440px 1fr;
-    gap: 24px;
-    padding: 22px;
-    max-width: 1400px;
-    width: 100%;
-    margin: 0 auto;
-    align-items: start;
-  }
-  @media (max-width: 960px) {
-    .main-grid { grid-template-columns: 1fr; justify-items: center; }
-  }
-  /* Khung vỏ đồng hồ Huawei Watch Fit 4 Pro */
-  .watch-column {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 14px;
-  }
-  .watch-strap-top, .watch-strap-bottom {
-    width: 170px;
-    height: 36px;
-    background: linear-gradient(90deg, #1b222c, #2c3746, #1b222c);
-    border-radius: 10px;
-    opacity: 0.85;
-  }
-  .watch-case {
-    position: relative;
-    width: 344px;
-    height: 404px;
-    background: linear-gradient(145deg, #3c4654, #1c222b);
-    border-radius: 68px;
-    padding: 16px;
-    box-shadow:
-      0 24px 60px rgba(0,0,0,0.75),
-      inset 0 2px 4px rgba(255,255,255,0.25),
-      inset 0 -3px 6px rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: transform 0.1s ease;
-  }
-  .watch-case.vibrating {
-    animation: vibrateAnim 0.14s linear infinite;
-    box-shadow: 0 0 36px rgba(0, 230, 118, 0.75), inset 0 2px 4px rgba(255,255,255,0.3);
-  }
-  @keyframes vibrateAnim {
-    0% { transform: translate(0, 0) rotate(0deg); }
-    25% { transform: translate(-3px, 1px) rotate(-0.8deg); }
-    50% { transform: translate(3px, -1px) rotate(0.8deg); }
-    75% { transform: translate(-2px, -1px) rotate(-0.5deg); }
-    100% { transform: translate(0, 0) rotate(0deg); }
-  }
-  /* Núm xoay Digital Crown đỏ đặc trưng của Fit 4 Pro */
-  .watch-crown {
-    position: absolute;
-    right: -13px;
-    top: 86px;
-    width: 13px;
-    height: 48px;
-    background: linear-gradient(180deg, #525d6e, #252c37);
-    border-radius: 0 8px 8px 0;
-    border-left: 3px solid #e53935;
-    box-shadow: 2px 2px 6px rgba(0,0,0,0.5);
-  }
-  .watch-side-btn {
-    position: absolute;
-    right: -9px;
-    top: 230px;
-    width: 9px;
-    height: 54px;
-    background: linear-gradient(180deg, #434d5c, #202630);
-    border-radius: 0 5px 5px 0;
-  }
-  .watch-screen {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    background: #0A0E14;
-    border-radius: 54px;
     overflow: hidden;
-    border: 2px solid #05070a;
   }
-  #mapCanvas {
-    width: 100%;
-    height: 100%;
-    display: block;
-  }
-  /* Lớp phủ TurnBanner phía trên mặt đồng hồ */
-  .turn-banner {
-    position: absolute;
-    top: 14px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 90%;
-    background: rgba(16, 27, 40, 0.88);
-    border: 1px solid #26384c;
-    border-radius: 22px;
-    padding: 9px 12px;
+  /* Thanh trạng thái iPhone + Dynamic Island */
+  .ios-statusbar {
+    height: 44px;
+    padding: 0 22px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    backdrop-filter: blur(6px);
-    transition: all 0.2s ease;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    background: #000;
+    position: relative;
+    flex-shrink: 0;
+    z-index: 20;
   }
-  .turn-banner.turn-now {
-    background: rgba(0, 77, 64, 0.92);
-    border-color: #00e676;
-  }
-  .turn-banner.reroute {
-    background: rgba(78, 42, 4, 0.92);
-    border-color: #ffa726;
-  }
-  .turn-banner.stale {
-    background: rgba(38, 50, 56, 0.92);
-    border-color: #ef5350;
-  }
-  .turn-icon-box {
-    width: 44px;
-    height: 44px;
-    border-radius: 14px;
-    background: #00b0ff;
-    color: #05101a;
-    font-size: 26px;
-    font-weight: 800;
+  .dynamic-island {
+    width: 112px;
+    height: 26px;
+    background: #111;
+    border-radius: 16px;
+    border: 1px solid #222;
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--ios-green);
   }
-  .turn-text-col {
+  .island-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ios-green);
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  /* Nội dung các Tab */
+  .tab-container {
     flex: 1;
-    min-width: 0;
-  }
-  .turn-dist-row {
+    position: relative;
+    overflow: hidden;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+  }
+  .tab-pane {
+    display: none;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow-y: auto;
+  }
+  .tab-pane.active {
+    display: flex;
+  }
+  /* Tab 1: Bản đồ thật + Tìm kiếm + Điều hướng */
+  .top-search-bar {
+    padding: 10px 12px;
+    background: rgba(28, 28, 30, 0.95);
+    border-bottom: 1px solid #2c2c2e;
+    z-index: 10;
+  }
+  .search-row {
+    display: flex;
     gap: 6px;
   }
-  .turn-dist {
-    font-size: 22px;
-    font-weight: 800;
-    color: #fff;
-    line-height: 1.1;
-  }
-  .turn-now-pill {
-    font-size: 9px;
-    font-weight: 800;
-    color: #00e676;
-    background: rgba(0, 230, 118, 0.18);
-    padding: 2px 6px;
-    border-radius: 6px;
-    display: none;
-  }
-  .turn-road {
-    font-size: 13px;
-    color: #cfd8dc;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-top: 2px;
-  }
-  /* Nút thu phóng trên mặt đồng hồ */
-  .zoom-controls {
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .zoom-btn {
-    width: 30px;
-    height: 30px;
-    border-radius: 15px;
-    border: 1px solid #26384c;
-    background: rgba(16, 27, 40, 0.78);
-    color: #e0f7fa;
-    font-size: 16px;
-    font-weight: bold;
-    cursor: pointer;
-  }
-  /* Thanh trạng thái dưới cùng trên đồng hồ */
-  .bottom-bar {
-    position: absolute;
-    bottom: 12px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 86%;
-    background: rgba(16, 27, 40, 0.9);
-    border: 1px solid #243447;
-    border-radius: 24px;
-    padding: 7px 14px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .spd-box {
-    text-align: center;
-  }
-  .spd-val {
-    font-size: 16px;
-    font-weight: 800;
-    color: var(--cyan);
-    line-height: 1;
-  }
-  .spd-unit {
-    font-size: 9px;
-    color: #78909c;
-  }
-  .eta-box {
-    text-align: center;
-  }
-  .rem-val {
-    font-size: 13px;
-    font-weight: 700;
-    color: #fff;
-  }
-  .eta-val {
-    font-size: 10px;
-    color: #90a4ae;
-  }
-  .p2p-pill {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 10px;
-    font-weight: 700;
-  }
-  .p2p-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-  }
-  /* Bảng điều khiển bên phải */
-  .controls-column {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px 18px;
-  }
-  .card h2 {
-    margin: 0 0 10px 0;
-    font-size: 15px;
-    color: var(--cyan);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .btn-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  button.ctrl-btn {
-    background: #1b2838;
-    color: #fff;
-    border: 1px solid #2c425c;
-    border-radius: 10px;
-    padding: 9px 13px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  button.ctrl-btn:hover {
-    background: #25384e;
-    border-color: var(--cyan);
-  }
-  button.ctrl-btn.primary {
-    background: #00897b;
-    border-color: #00e676;
-  }
-  button.ctrl-btn.warn {
-    background: #e65100;
-    border-color: #ffa726;
-  }
-  button.ctrl-btn.danger {
-    background: #c62828;
-    border-color: #ff5252;
-  }
-  .input-group {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-  input[type="text"] {
+  .search-row input {
     flex: 1;
-    background: #090e15;
-    border: 1px solid #26384c;
+    background: #2c2c2e;
+    border: none;
     color: #fff;
     padding: 9px 12px;
     border-radius: 10px;
     font-size: 13px;
+    outline: none;
   }
-  .url-box {
-    background: #080c12;
-    border: 1px dashed var(--cyan);
-    padding: 10px 12px;
+  .ios-btn {
+    background: var(--ios-blue);
+    color: #fff;
+    border: none;
     border-radius: 10px;
-    font-family: monospace;
+    padding: 8px 12px;
     font-size: 13px;
-    color: var(--accent);
-    margin: 6px 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    font-weight: 600;
+    cursor: pointer;
   }
-  .log-box {
-    background: #070a0f;
-    border: 1px solid #1b2738;
+  .ios-btn.green { background: var(--ios-green); color: #021a08; }
+  .ios-btn.orange { background: var(--ios-orange); color: #1f1100; }
+  .ios-btn.red { background: var(--ios-red); }
+  .ios-btn.gray { background: var(--ios-card2); }
+  .search-results {
+    max-height: 150px;
+    overflow-y: auto;
+    margin-top: 6px;
+    background: #252528;
     border-radius: 10px;
-    padding: 10px;
-    height: 150px;
+    display: none;
+  }
+  .search-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid #333;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .search-item:hover { background: #3a3a3c; }
+  #iosMap {
+    flex: 1;
+    width: 100%;
+    min-height: 260px;
+    z-index: 1;
+  }
+  /* Bảng điều khiển lái xe nổi dưới bản đồ */
+  .nav-sheet {
+    background: var(--ios-card);
+    border-top: 1px solid #2c2c2e;
+    padding: 10px 14px;
+    z-index: 10;
+  }
+  .turn-preview {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .turn-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ios-green);
+  }
+  .turn-sub {
+    font-size: 12px;
+    color: var(--ios-sub);
+  }
+  .quick-routes {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .chip {
+    background: #2c2c2e;
+    color: #e5e5ea;
+    border: 1px solid #3a3a3c;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .chip:hover { border-color: var(--ios-blue); color: #fff; }
+  /* Tab 2 & Tab 3 Cards */
+  .ios-section {
+    background: var(--ios-card);
+    border-radius: 14px;
+    padding: 14px;
+    margin: 10px 12px 0 12px;
+  }
+  .ios-section h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: var(--ios-cyan);
+  }
+  .ios-section p {
+    margin: 0 0 10px 0;
+    font-size: 12px;
+    color: var(--ios-sub);
+    line-height: 1.4;
+  }
+  .mono-box {
+    background: #000;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--ios-green);
+    margin-bottom: 8px;
+  }
+  .log-list {
+    background: #09090b;
+    border-radius: 10px;
+    padding: 8px;
+    height: 220px;
     overflow-y: auto;
     font-family: monospace;
-    font-size: 12px;
-    color: #b0bec5;
+    font-size: 11px;
+    color: #d1d1d6;
   }
-  .log-line {
-    padding: 2px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
+  /* Thanh TabBar chuẩn iOS */
+  .ios-tabbar {
+    height: 58px;
+    background: rgba(22, 22, 24, 0.98);
+    border-top: 1px solid #2c2c2e;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    flex-shrink: 0;
+    z-index: 20;
   }
-  .vib-toast {
-    height: 24px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--accent);
+  .tab-btn {
+    background: none;
+    border: none;
+    color: var(--ios-sub);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active { color: var(--ios-blue); }
+  .tab-btn span.icon { font-size: 18px; }
+  /* Màn hình khóa iPhone (iOS Lock Screen Overlay cho Mốc 2 & Mốc 4) */
+  .lockscreen-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(8,15,26,0.96), rgba(3,5,9,0.98));
+    z-index: 100;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 55px 24px 36px 24px;
     text-align: center;
+  }
+  .lockscreen-overlay.locked {
+    display: flex;
+  }
+  .lock-clock {
+    font-size: 64px;
+    font-weight: 200;
+    letter-spacing: -1px;
+    margin-top: 10px;
+  }
+  .lock-date {
+    font-size: 15px;
+    color: #aeaeb2;
+  }
+  .lock-widget {
+    width: 100%;
+    background: rgba(28, 28, 30, 0.85);
+    border: 1px solid #3a3a3c;
+    border-radius: 18px;
+    padding: 14px;
+    text-align: left;
   }
 </style>
 </head>
 <body>
-<header>
-  <h1>
-    <span>⌚ Huawei Watch Fit 4 Pro — Máy ảo G Navigation</span>
-    <span class="badge">408 × 480 AMOLED Canvas</span>
-  </h1>
-  <div style="font-size:13px;color:var(--muted);">
-    Gói P2P đã nhận: <strong id="pktCount" style="color:var(--accent)">0</strong>
+
+<!-- Thanh trạng thái iPhone -->
+<div class="ios-statusbar">
+  <span id="iosClock">14:20</span>
+  <div class="dynamic-island">
+    <span class="island-dot" id="islandDot"></span>
+    <span id="islandText">P2P Fit 4 Pro</span>
   </div>
-</header>
+  <span>5G 🔋98%</span>
+</div>
 
-<div class="main-grid">
-  <!-- Cột trái: Đồng hồ ảo Huawei Watch Fit 4 Pro -->
-  <div class="watch-column">
-    <div class="watch-strap-top"></div>
-    <div class="watch-case" id="watchCase">
-      <div class="watch-crown" title="Núm xoay Digital Crown"></div>
-      <div class="watch-side-btn" title="Nút chức năng"></div>
-      <div class="watch-screen">
-        <canvas id="mapCanvas" width="312" height="372"></canvas>
+<div class="tab-container">
+  <!-- TAB 1: Dẫn đường & Bản đồ thật -->
+  <div class="tab-pane active" id="tab-nav">
+    <div class="top-search-bar">
+      <div class="search-row">
+        <input type="text" id="searchInput" placeholder="Tìm điểm đến tại VN (VD: Hồ Gươm, Chợ Bến Thành)..." onkeydown="if(event.key==='Enter')searchPlace()" />
+        <button class="ios-btn" onclick="searchPlace()">Tìm</button>
+      </div>
+      <div class="search-results" id="searchResults"></div>
+    </div>
 
-        <!-- Thẻ báo rẽ phía trên -->
-        <div class="turn-banner" id="turnBanner">
-          <div class="turn-icon-box" id="turnIcon">↱</div>
-          <div class="turn-text-col">
-            <div class="turn-dist-row">
-              <span class="turn-dist" id="turnDist">85 m</span>
-              <span class="turn-now-pill" id="turnNowPill">RẼ NGAY</span>
-            </div>
-            <div class="turn-road" id="turnRoad">Nguyễn Huệ</div>
-          </div>
+    <!-- Bản đồ tương tác thật (Click để chọn đích hoặc Kéo xe máy để đi lệch tuyến!) -->
+    <div id="iosMap"></div>
+
+    <div class="nav-sheet">
+      <div class="quick-routes">
+        <span class="chip" onclick="startRealRoute(10.7721,106.6983, 10.7769,106.7032)">🛵 Bến Thành → Nhà hát TP</span>
+        <span class="chip" onclick="startRealRoute(10.7769,106.7032, 10.7770,106.6953)">🛵 Nhà hát TP → Dinh Độc Lập</span>
+        <span class="chip" onclick="startRealRoute(21.0285,105.8542, 21.0368,105.8347)">🛵 Hồ Gươm → Lăng Bác (Hà Nội)</span>
+      </div>
+
+      <div class="turn-preview">
+        <div>
+          <div class="turn-title" id="iosTurnDist">85 m · Rẽ phải</div>
+          <div class="turn-sub" id="iosTurnRoad">Đường tiếp theo: Nguyễn Huệ</div>
         </div>
-
-        <!-- Nút Zoom -->
-        <div class="zoom-controls">
-          <button class="zoom-btn" onclick="adjustZoom(-0.3)">+</button>
-          <button class="zoom-btn" onclick="adjustZoom(0.3)">−</button>
-        </div>
-
-        <!-- Thanh trạng thái dưới cùng -->
-        <div class="bottom-bar">
-          <div class="spd-box">
-            <div class="spd-val" id="spdVal">32</div>
-            <div class="spd-unit">km/h</div>
-          </div>
-          <div class="eta-box">
-            <div class="rem-val" id="remVal">1.8 km</div>
-            <div class="eta-val" id="etaVal">ETA 14:25</div>
-          </div>
-          <div class="p2p-pill">
-            <span class="p2p-dot" id="p2pDot"></span>
-            <span id="p2pLabel" style="color:#00e676">P2P</span>
-          </div>
+        <div style="text-align:right">
+          <div style="font-size:15px;font-weight:700;color:var(--ios-cyan)" id="iosSpeed">32 km/h</div>
+          <div class="turn-sub" id="iosEta">Còn 1.2 km</div>
         </div>
       </div>
+
+      <div style="display:flex;gap:8px;">
+        <button class="ios-btn green" style="flex:1" id="driveBtn" onclick="toggleDrive()">▶ Chạy xe GPS thật</button>
+        <button class="ios-btn gray" onclick="stepOnce()">⏭ +1 Bước</button>
+        <button class="ios-btn orange" onclick="lockIphoneScreen()" title="Khóa màn hình iPhone (Mốc 2 & 4)">🔒 Khóa iPhone</button>
+      </div>
+      <div style="font-size:11px;color:var(--ios-sub);margin-top:6px;">
+        💡 <strong>Mẹo tương tác thật</strong>: Nhấp chuột bất kỳ lên bản đồ để đổi điểm đến, hoặc <strong>nắm kéo chấm xanh xe máy</strong> chệch khỏi vạch đường > 45m để thấy đồng hồ DevEco tự rung báo lệch tuyến và tính lại đường!
+      </div>
     </div>
-    <div class="watch-strap-bottom"></div>
-    <div class="vib-toast" id="vibToast"></div>
   </div>
 
-  <!-- Cột phải: Bảng điều khiển kiểm thử & Kết nối với iPhone -->
-  <div class="controls-column">
-    <div class="card">
-      <h2>
-        <span>📱 1. Kết nối trực tiếp từ iPhone thật của bạn</span>
-        <span style="font-size:11px;color:var(--accent)">Cùng mạng Wi-Fi</span>
-      </h2>
-      <div style="font-size:13px;color:var(--muted);line-height:1.45;">
-        Mở app <strong>G Navigation</strong> trên iPhone → sang tab <strong>Cấu hình & Log</strong> → nhập địa chỉ máy ảo này vào ô <strong>URL Worker</strong> rồi bấm <strong>Lưu cấu hình</strong>:
-      </div>
-      <div class="url-box">
-        <span id="lanUrlText">http://__LAN_IP__:8787</span>
-        <button class="ctrl-btn" style="padding:4px 10px;font-size:11px" onclick="copyLanUrl()">Copy</button>
-      </div>
-      <div style="font-size:12px;color:var(--muted);">
-        Sau đó ở tab <strong>Dẫn đường</strong> trên iPhone, khi bạn bấm <em>Nhà hát TP (Q.1)</em>, <em>Dinh Độc Lập</em> hoặc tìm đường bất kỳ, đồng hồ ảo bên trái sẽ tự động nhận tuyến đường và vẽ ngay lập tức!
+  <!-- TAB 2: Kiểm thử Mốc 2 & Mốc 4 (Wear Engine P2P & Bluetooth) -->
+  <div class="tab-pane" id="tab-m2">
+    <div class="ios-section">
+      <h3>1. Định danh iOS & Kết nối DevEco Watch Emulator</h3>
+      <p>Máy ảo iPhone này đang phát trực tiếp từng gói tin P2P (<code>S</code>, <code>R</code>, <code>M</code>, <code>H</code>) sang ứng dụng <code>com.gnavigation.watch</code> đang chạy trên <strong>DevEco Studio Wearable Emulator</strong> của bạn.</p>
+      <div class="mono-box">
+        Bundle ID: com.gnavigation.ios<br/>
+        Peer Watch: com.gnavigation.watch (Connected)<br/>
+        Đã truyền: <span id="m2PktCount">0</span> gói P2P
       </div>
     </div>
 
-    <div class="card">
-      <h2>🛵 2. Giả lập chạy xe máy & Kiểm thử các Mốc (Mốc 1 → Mốc 4)</h2>
-      <div class="btn-row">
-        <button class="ctrl-btn primary" id="autoDriveBtn" onclick="toggleAutoDrive()">▶ Bắt đầu chạy xe dọc tuyến</button>
-        <button class="ctrl-btn" onclick="stepForward()">⏭ Nhích 1 bước GPS</button>
-        <button class="ctrl-btn" onclick="sendTurnNow30m()">🔔 Báo rẽ ngay (30m + Rung)</button>
-        <button class="ctrl-btn warn" onclick="simulateOffRoute()">⚠ Giả lập đi lệch tuyến (Reroute)</button>
-        <button class="ctrl-btn danger" onclick="simulateDisconnect()">🔌 Ngắt kết nối Bluetooth (Mốc 4)</button>
+    <div class="ios-section">
+      <h3>2. Kiểm thử Mốc 2 (Chỉ dẫn mẫu & Khóa màn hình)</h3>
+      <p>Gửi gói tin mẫu hoặc khóa màn hình iPhone trong khi xe đang chạy để kiểm tra đồng hồ DevEco Emulator vẫn nhận dữ liệu nền:</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="ios-btn green" onclick="sendSampleM2()">📨 Gửi chỉ dẫn mẫu + Cụm đường giả ngay</button>
+        <button class="ios-btn orange" onclick="startDriveAndLock()">🔒 Bật chạy xe nền & Khóa màn hình iPhone ngay</button>
       </div>
     </div>
 
-    <div class="card">
-      <h2>🗺️ 3. Tìm đường xe máy thật (OSRM / VIETMAP) ngay trên máy ảo</h2>
-      <div class="btn-row" style="margin-bottom:10px;">
-        <button class="ctrl-btn" onclick="loadRealRoute(10.7721,106.6983, 10.7769,106.7032, 'Chợ Bến Thành → Nhà hát TP')">Chợ Bến Thành → Nhà hát TP</button>
-        <button class="ctrl-btn" onclick="loadRealRoute(10.7769,106.7032, 10.7770,106.6953, 'Nhà hát TP → Dinh Độc Lập')">Nhà hát TP → Dinh Độc Lập</button>
-        <button class="ctrl-btn" onclick="loadRealRoute(10.7770,106.6953, 10.7880,106.7052, 'Dinh Độc Lập → Thảo Cầm Viên')">Dinh Độc Lập → Thảo Cầm Viên</button>
-      </div>
-      <div style="font-size:12px;color:var(--muted);">
-        Bấm một tuyến bất kỳ ở trên để máy ảo tải toàn bộ tọa độ đường phố thật và chạy mô phỏng từng ngã rẽ trên mặt đồng hồ.
-      </div>
+    <div class="ios-section">
+      <h3>3. Kiểm thử Mốc 4 (Ngắt & Nối lại Bluetooth P2P)</h3>
+      <p>Khi tắt Bluetooth quá 12 giây, đồng hồ DevEco sẽ tự động ẩn chỉ dẫn cũ và báo <em>"⚠ Mất dữ liệu từ iPhone"</em>. Khi bật lại Bluetooth, iPhone lập tức đồng bộ lại tuyến đường:</p>
+      <button class="ios-btn red" id="btToggleBtn" style="width:100%" onclick="toggleBluetooth()">🔌 Tắt Bluetooth tới đồng hồ (Test mất kết nối)</button>
+    </div>
+  </div>
+
+  <!-- TAB 3: Cấu hình & Nhật ký P2P -->
+  <div class="tab-pane" id="tab-logs">
+    <div class="ios-section">
+      <h3>Cầu nối P2P thời gian thực (iOS ↔ HarmonyOS Emulator)</h3>
+      <p>Mọi thao tác trên máy ảo iPhone này (hoặc từ iPhone thật qua <code>http://__LAN_IP__:8787</code>) đều được ghi lại bên dưới:</p>
+      <div class="log-list" id="iosLogList"></div>
+    </div>
+  </div>
+
+  <!-- Lớp phủ Màn hình khóa iPhone (Lock Screen) -->
+  <div class="lockscreen-overlay" id="lockOverlay">
+    <div>
+      <div style="font-size:13px;color:var(--ios-green);font-weight:600">🔒 ĐANG KHÓA MÀN HÌNH IPHONE</div>
+      <div class="lock-clock" id="lockClock">14:20</div>
+      <div class="lock-date">Thứ Ba, 10 tháng 11</div>
     </div>
 
-    <div class="card">
-      <h2>📡 Nhật ký gói tin P2P thời gian thực</h2>
-      <div class="log-box" id="logBox"></div>
+    <div class="lock-widget">
+      <div style="font-size:11px;color:var(--ios-cyan);font-weight:700;margin-bottom:4px;">G NAVIGATION · ĐANG PHÁT P2P NỀN SANG ĐỒNG HỒ</div>
+      <div style="font-size:16px;font-weight:700" id="lockNavTitle">Đang gửi GPS sang Fit 4 Pro...</div>
+      <div style="font-size:12px;color:#aeaeb2;margin-top:3px" id="lockNavSub">Quan sát đồng hồ DevEco Emulator bên cạnh vẫn tự xoay bản đồ và đếm ngược khoảng cách!</div>
     </div>
+
+    <button class="ios-btn" style="width:80%;padding:12px;border-radius:999px;font-size:15px" onclick="unlockIphoneScreen()">🔓 Mở khóa màn hình iPhone</button>
   </div>
 </div>
 
+<!-- Thanh điều hướng dưới cùng của iPhone -->
+<div class="ios-tabbar">
+  <button class="tab-btn active" id="btn-tab-nav" onclick="switchTab('nav')">
+    <span class="icon">🧭</span>
+    <span>Dẫn đường</span>
+  </button>
+  <button class="tab-btn" id="btn-tab-m2" onclick="switchTab('m2')">
+    <span class="icon">⌚</span>
+    <span>Kiểm thử Mốc 2 & 4</span>
+  </button>
+  <button class="tab-btn" id="btn-tab-logs" onclick="switchTab('logs')">
+    <span class="icon">📡</span>
+    <span>Nhật ký P2P</span>
+  </button>
+</div>
+
 <script>
-let zoomScaleMetersPerPx = 1.65;
-let hubData = null;
-let autoDriveTimer = null;
-let routeCursor = 0;
-let lastVibSeq = -1;
-let forceStale = false;
+let map, riderMarker, destMarker, routeLine;
+let currentRoute = [];
+let currentSteps = [];
+let routeIdx = 0;
+let seqCounter = 10;
+let driveTimer = null;
+let btConnected = true;
+let loadedTileKey = "";
 
-const MANEUVER_SYMBOLS = {
-  STRAIGHT: '↑',
-  TURN_LEFT: '↰',
-  TURN_RIGHT: '↱',
-  SLIGHT_LEFT: '↖',
-  SLIGHT_RIGHT: '↗',
-  SHARP_LEFT: '↙',
-  SHARP_RIGHT: '↘',
-  UTURN: '↶',
-  ROUNDABOUT: '⟳',
-  ARRIVE: '🏁'
-};
-
-function adjustZoom(delta) {
-  const next = zoomScaleMetersPerPx + delta;
-  if (next >= 0.7 && next <= 4.0) {
-    zoomScaleMetersPerPx = next;
-    renderWatch();
+function switchTab(name) {
+  ['nav', 'm2', 'logs'].forEach(t => {
+    document.getElementById('tab-' + t).classList.toggle('active', t === name);
+    document.getElementById('btn-tab-' + t).classList.toggle('active', t === name);
+  });
+  if (name === 'nav' && map) {
+    setTimeout(() => map.invalidateSize(), 100);
   }
 }
 
-function copyLanUrl() {
-  const txt = document.getElementById('lanUrlText').innerText;
-  navigator.clipboard.writeText(txt);
+function initMap() {
+  map = L.map('iosMap', { zoomControl: false }).setView([10.77584, 106.70042], 16);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  const riderIcon = L.divIcon({
+    html: '<div style="width:22px;height:22px;border-radius:50%;background:#00e5ff;border:3px solid #fff;box-shadow:0 0 12px #00e5ff;"></div>',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11]
+  });
+
+  riderMarker = L.marker([10.77584, 106.70042], { icon: riderIcon, draggable: true }).addTo(map);
+  riderMarker.bindTooltip("Kéo tôi đi chệch đường để test Reroute!", { direction: "top" });
+
+  // Khi người dùng nắm kéo xe máy trên bản đồ iPhone
+  riderMarker.on('dragend', async function(e) {
+    const pos = riderMarker.getLatLng();
+    await handleManualRiderMove(pos.lat, pos.lng);
+  });
+
+  // Khi người dùng click bất kỳ lên bản đồ iPhone -> Đặt điểm đến mới và dẫn đường thật!
+  map.on('click', async function(e) {
+    const start = riderMarker.getLatLng();
+    await startRealRoute(start.lat, start.lng, e.latlng.lat, e.latlng.lng);
+  });
+
+  // Tải sẵn tuyến đường ban đầu
+  startRealRoute(10.7721, 106.6983, 10.7769, 106.7032);
 }
 
-async function pollState() {
-  try {
-    const res = await fetch('/api/state');
-    hubData = await res.json();
-    renderWatch();
-  } catch (e) {}
-}
-
-function projectToScreen(lat, lng, centerLat, centerLng, heading, w, h) {
-  const cosLat = Math.cos(centerLat * Math.PI / 180.0);
-  const northMeters = (lat - centerLat) * 111320.0;
-  const eastMeters = (lng - centerLng) * 111320.0 * cosLat;
-
-  const rad = (heading * Math.PI) / 180.0;
-  const cosH = Math.cos(rad);
-  const sinH = Math.sin(rad);
-
-  const rotX = eastMeters * cosH - northMeters * sinH;
-  const rotY = eastMeters * sinH + northMeters * cosH;
-
-  const anchorX = w * 0.5;
-  const anchorY = h * 0.67;
-
-  return {
-    x: anchorX + rotX / zoomScaleMetersPerPx,
-    y: anchorY - rotY / zoomScaleMetersPerPx
-  };
-}
-
-function triggerVibrationUI(vibCode, seq) {
-  if (!vibCode || seq === lastVibSeq) return;
-  lastVibSeq = seq;
-  const watchCase = document.getElementById('watchCase');
-  const toast = document.getElementById('vibToast');
-  watchCase.classList.add('vibrating');
-  if (vibCode === 1) {
-    toast.innerText = '📳 RUNG 2 NHỊP: Sắp tới ngã rẽ (100m)';
-  } else if (vibCode === 2) {
-    toast.innerText = '📳 RUNG MẠNH: Rẽ ngay (30m)!';
-  } else if (vibCode === 3) {
-    toast.innerText = '📳 RUNG CẢNH BÁO 3 NHỊP: Đi lệch tuyến — Đang tính lại đường!';
-  }
-  setTimeout(() => {
-    watchCase.classList.remove('vibrating');
-  }, 900);
-}
-
-function renderWatch() {
-  if (!hubData) return;
-  const s = hubData.state;
-  const roads = hubData.roads || [];
-  const route = hubData.routePoints || [];
-  const isStale = forceStale || (hubData.ageSeconds > 12 && hubData.mode === 'LIVE_P2P');
-
-  document.getElementById('pktCount').innerText = hubData.packetsReceived;
-
-  // Cập nhật TurnBanner
-  const banner = document.getElementById('turnBanner');
-  const iconBox = document.getElementById('turnIcon');
-  const distEl = document.getElementById('turnDist');
-  const roadEl = document.getElementById('turnRoad');
-  const pillEl = document.getElementById('turnNowPill');
-
-  banner.className = 'turn-banner';
-  if (isStale) {
-    banner.classList.add('stale');
-    iconBox.style.background = '#546e7a';
-    iconBox.innerText = '⚠';
-    distEl.innerText = 'Mất dữ liệu';
-    roadEl.innerText = 'Đã ẩn chỉ dẫn cũ · Chờ nối lại';
-    pillEl.style.display = 'none';
-  } else if (s.reroute) {
-    banner.classList.add('reroute');
-    iconBox.style.background = '#ffa726';
-    iconBox.innerText = '↻';
-    distEl.innerText = 'Lệch tuyến';
-    roadEl.innerText = 'Đang tính lại đường...';
-    pillEl.style.display = 'none';
-  } else {
-    if (s.mDist <= 40) {
-      banner.classList.add('turn-now');
-      iconBox.style.background = '#00e676';
-      pillEl.style.display = 'inline-block';
-    } else {
-      iconBox.style.background = '#00b0ff';
-      pillEl.style.display = 'none';
-    }
-    iconBox.innerText = MANEUVER_SYMBOLS[s.mType] || '↑';
-    distEl.innerText = s.mDist >= 1000 ? (s.mDist / 1000).toFixed(1) + ' km' : s.mDist + ' m';
-    roadEl.innerText = s.road || 'Đường phía trước';
-  }
-
-  // Cập nhật BottomBar
-  document.getElementById('spdVal').innerText = Math.round(s.spd || 0);
-  document.getElementById('remVal').innerText = s.rem >= 1000 ? (s.rem / 1000).toFixed(1) + ' km' : s.rem + ' m';
-  document.getElementById('etaVal').innerText = 'ETA ' + (s.eta || '--:--');
-
-  const dot = document.getElementById('p2pDot');
-  const lbl = document.getElementById('p2pLabel');
-  if (isStale) {
-    dot.style.background = '#ff5252';
-    lbl.style.color = '#ff5252';
-    lbl.innerText = 'MẤT KN';
-  } else {
-    dot.style.background = '#00e676';
-    lbl.style.color = '#00e676';
-    lbl.innerText = 'P2P';
-  }
-
-  triggerVibrationUI(s.vib, s.seq);
-
-  // Vẽ bản đồ Canvas
-  const canvas = document.getElementById('mapCanvas');
-  const c = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
-  const anchorX = w * 0.5;
-  const anchorY = h * 0.67;
-
-  c.clearRect(0, 0, w, h);
-  c.fillStyle = '#0A0E14';
-  c.fillRect(0, 0, w, h);
-
-  // Vòng bán kính 100m
-  c.strokeStyle = '#142030';
-  c.lineWidth = 1;
-  c.beginPath();
-  c.arc(anchorX, anchorY, 100 / zoomScaleMetersPerPx, 0, Math.PI * 2);
-  c.stroke();
-
-  // Vẽ đường nền xung quanh
-  for (const seg of roads) {
-    if (!seg.p || seg.p.length < 2) continue;
-    c.save();
-    c.lineCap = 'round';
-    c.lineJoin = 'round';
-    c.strokeStyle = seg.c === 1 ? '#263447' : (seg.c === 2 ? '#1C2736' : '#151E2B');
-    c.lineWidth = seg.c === 1 ? 8 : (seg.c === 2 ? 5 : 3);
-    c.beginPath();
-    const p0 = projectToScreen(seg.p[0][0], seg.p[0][1], s.lat, s.lng, s.hdg, w, h);
-    c.moveTo(p0.x, p0.y);
-    for (let i = 1; i < seg.p.length; i++) {
-      const pi = projectToScreen(seg.p[i][0], seg.p[i][1], s.lat, s.lng, s.hdg, w, h);
-      c.lineTo(pi.x, pi.y);
-    }
-    c.stroke();
-
-    if (seg.n && seg.c <= 2) {
-      const mid = seg.p[Math.floor(seg.p.length / 2)];
-      const mp = projectToScreen(mid[0], mid[1], s.lat, s.lng, s.hdg, w, h);
-      if (mp.x > 25 && mp.x < w - 25 && mp.y > 85 && mp.y < h - 55) {
-        c.fillStyle = '#607d8b';
-        c.font = '11px sans-serif';
-        c.textAlign = 'center';
-        c.fillText(seg.n, mp.x, mp.y - 5);
-      }
-    }
-    c.restore();
-  }
-
-  // Vẽ tuyến đường chính
-  if (route.length >= 2) {
-    c.save();
-    c.lineCap = 'round';
-    c.lineJoin = 'round';
-    c.strokeStyle = '#062B1F';
-    c.lineWidth = 12;
-    c.beginPath();
-    const r0 = projectToScreen(route[0][0], route[0][1], s.lat, s.lng, s.hdg, w, h);
-    c.moveTo(r0.x, r0.y);
-    for (let i = 1; i < route.length; i++) {
-      const ri = projectToScreen(route[i][0], route[i][1], s.lat, s.lng, s.hdg, w, h);
-      c.lineTo(ri.x, ri.y);
-    }
-    c.stroke();
-
-    c.strokeStyle = isStale ? '#4B5B6E' : (s.reroute ? '#FFA726' : '#00E676');
-    c.lineWidth = 7;
-    c.stroke();
-
-    for (let i = 1; i < route.length - 1; i++) {
-      const ni = projectToScreen(route[i][0], route[i][1], s.lat, s.lng, s.hdg, w, h);
-      if (ni.y < anchorY + 12 && ni.y > 70) {
-        c.fillStyle = '#ffffff';
-        c.beginPath();
-        c.arc(ni.x, ni.y, 3.2, 0, Math.PI * 2);
-        c.fill();
-      }
-    }
-    c.restore();
-  }
-
-  // Vẽ mũi tên vị trí xe máy
-  c.save();
-  c.fillStyle = isStale ? 'rgba(120, 144, 156, 0.22)' : 'rgba(0, 229, 255, 0.22)';
-  c.beginPath();
-  c.arc(anchorX, anchorY, 20, 0, Math.PI * 2);
-  c.fill();
-
-  c.fillStyle = isStale ? '#90A4AE' : '#00E5FF';
-  c.strokeStyle = '#FFFFFF';
-  c.lineWidth = 2;
-  c.beginPath();
-  c.moveTo(anchorX, anchorY - 12);
-  c.lineTo(anchorX + 10, anchorY + 10);
-  c.lineTo(anchorX, anchorY + 4);
-  c.lineTo(anchorX - 10, anchorY + 10);
-  c.closePath();
-  c.fill();
-  c.stroke();
-  c.restore();
-
-  // Cập nhật nhật ký
-  const logBox = document.getElementById('logBox');
-  logBox.innerHTML = (hubData.recentLogs || []).map(l => `<div class="log-line">${l}</div>`).join('');
-}
-
-async function sendP2P(pkt) {
-  forceStale = false;
+async function sendP2P(packets) {
   await fetch('/api/p2p', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(pkt)
+    body: JSON.stringify(packets)
   });
-  await pollState();
 }
 
-async function stepForward() {
-  if (!hubData || !hubData.routePoints || hubData.routePoints.length < 2) return;
-  const pts = hubData.routePoints;
-  routeCursor = (routeCursor + 1) % (pts.length - 1);
-  const curr = pts[routeCursor];
-  const next = pts[routeCursor + 1];
+async function syncNearbyRoadsToWatch(lat, lng, force = false) {
+  const tKey = `${Math.round(lat * 333)}_${Math.round(lng * 333)}`;
+  if (!force && tKey === loadedTileKey) return;
+  loadedTileKey = tKey;
+  try {
+    const res = await fetch(`/api/roads?lat=${lat}&lng=${lng}&radius=340`);
+    const data = await res.json();
+    if (data.roads && data.roads.length > 0) {
+      // Chia thành các gói M giống hệt P2PPacketChunker.makeRoadChunks trên Swift
+      const chunkSize = 6;
+      const chunks = [];
+      for (let i = 0; i < data.roads.length; i += chunkSize) {
+        chunks.push(data.roads.slice(i, i + chunkSize));
+      }
+      const pkts = chunks.map((rds, idx) => ({
+        t: 'M',
+        tile: data.tile || tKey,
+        idx: idx,
+        tot: chunks.length,
+        rds: rds
+      }));
+      await sendP2P(pkts);
+    }
+  } catch (e) {}
+}
+
+async function startRealRoute(oLat, oLng, dLat, dLng, isReroute = false) {
+  try {
+    riderMarker.setLatLng([oLat, oLng]);
+    if (destMarker) map.removeLayer(destMarker);
+    destMarker = L.marker([dLat, dLng]).addTo(map);
+
+    const res = await fetch(`/api/route?origin=${oLat},${oLng}&dest=${dLat},${dLng}&vehicle=motorcycle`);
+    const route = await res.json();
+    if (!route.points || route.points.length < 2) return;
+
+    currentRoute = route.points;
+    currentSteps = route.steps || [];
+    routeIdx = 0;
+
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(currentRoute, { color: '#30d158', weight: 6 }).addTo(map);
+    if (!isReroute) {
+      map.fitBounds(routeLine.getBounds(), { padding: [30, 30] });
+    }
+
+    // 1. Chia nhỏ tuyến đường thành các gói R gửi sang đồng hồ DevEco Emulator
+    const maxPts = 22;
+    const rChunks = [];
+    for (let i = 0; i < currentRoute.length; i += maxPts) {
+      const slice = currentRoute.slice(i, i + maxPts);
+      if (i > 0 && rChunks.length > 0) {
+        slice.unshift(rChunks[rChunks.length - 1][rChunks[rChunks.length - 1].length - 1]);
+      }
+      rChunks.push(slice);
+    }
+    const rPkts = rChunks.map((pts, idx) => ({
+      t: 'R',
+      id: route.routeId,
+      idx: idx,
+      tot: rChunks.length,
+      pts: pts
+    }));
+    await sendP2P(rPkts);
+
+    // 2. Tải mạng lưới đường phố xung quanh từ OpenStreetMap Overpass gửi sang đồng hồ
+    await syncNearbyRoadsToWatch(oLat, oLng, true);
+
+    // 3. Gửi gói trạng thái S đầu tiên
+    await emitPositionAtIndex(0);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function handleManualRiderMove(lat, lng) {
+  if (currentRoute.length < 2) return;
+  let minD = 999999;
+  let closestIdx = 0;
+  for (let i = 0; i < currentRoute.length; i++) {
+    const d = haversineMeters(lat, lng, currentRoute[i][0], currentRoute[i][1]);
+    if (d < minD) {
+      minD = d;
+      closestIdx = i;
+    }
+  }
+
+  // Nếu kéo xe máy lệch khỏi tuyến > 42m -> Phát lệnh rung cảnh báo lệch tuyến (vib=3, reroute=true) lên đồng hồ rồi tự tính lại tuyến!
+  if (minD > 42 && destMarker) {
+    seqCounter += 1;
+    document.getElementById('iosTurnDist').innerText = '⚠ Lệch tuyến (' + Math.round(minD) + 'm)';
+    document.getElementById('iosTurnRoad').innerText = 'Đang tính lại đường mới...';
+
+    await sendP2P({
+      t: 'S',
+      seq: seqCounter,
+      ts: Math.floor(Date.now() / 1000),
+      lat: lat,
+      lng: lng,
+      hdg: 0,
+      spd: 28,
+      mType: 'UTURN',
+      mDist: Math.round(minD),
+      road: 'Đang tính lại đường...',
+      eta: '--:--',
+      rem: 1000,
+      vib: 3,
+      reroute: true
+    });
+
+    setTimeout(async () => {
+      const dest = destMarker.getLatLng();
+      await startRealRoute(lat, lng, dest.lat, dest.lng, true);
+    }, 1600);
+  } else {
+    routeIdx = closestIdx;
+    await emitPositionAtIndex(routeIdx);
+  }
+}
+
+async function emitPositionAtIndex(idx) {
+  if (currentRoute.length < 2) return;
+  const safeIdx = Math.min(idx, currentRoute.length - 1);
+  const curr = currentRoute[safeIdx];
+  const next = currentRoute[Math.min(safeIdx + 1, currentRoute.length - 1)];
+
+  riderMarker.setLatLng([curr[0], curr[1]]);
 
   const dy = next[0] - curr[0];
   const dx = next[1] - curr[1];
-  const hdg = Math.round((Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
-  const mDist = Math.max(15, (pts.length - 1 - routeCursor) * 35);
-  const vib = mDist <= 35 ? 2 : (mDist <= 105 && mDist >= 70 ? 1 : 0);
+  const hdg = (dy === 0 && dx === 0) ? 0 : Math.round((Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
 
-  await sendP2P({
+  // Tìm bước rẽ tiếp theo
+  let nextStep = currentSteps.find(s => haversineMeters(curr[0], curr[1], s.location[0], s.location[1]) > 15) || currentSteps[currentSteps.length - 1];
+  let mDist = nextStep ? Math.round(haversineMeters(curr[0], curr[1], nextStep.location[0], nextStep.location[1])) : 50;
+  let mType = nextStep ? nextStep.maneuverType : 'STRAIGHT';
+  let road = nextStep ? nextStep.roadName : 'Đường phía trước';
+
+  if (safeIdx >= currentRoute.length - 1) {
+    mType = 'ARRIVE';
+    mDist = 0;
+    road = 'Đã tới điểm đích';
+  }
+
+  let rem = 0;
+  for (let i = safeIdx; i < currentRoute.length - 1; i++) {
+    rem += haversineMeters(currentRoute[i][0], currentRoute[i][1], currentRoute[i+1][0], currentRoute[i+1][1]);
+  }
+  rem = Math.round(rem);
+
+  const vib = mDist <= 35 && mDist > 10 ? 2 : (mDist <= 105 && mDist >= 75 ? 1 : 0);
+  const spd = safeIdx >= currentRoute.length - 1 ? 0 : (32 + (safeIdx % 4) * 3);
+
+  seqCounter += 1;
+  const pkt = {
     t: 'S',
-    seq: (hubData.state.seq || 0) + 1,
+    seq: seqCounter,
     ts: Math.floor(Date.now() / 1000),
     lat: curr[0],
     lng: curr[1],
     hdg: hdg,
-    spd: 30 + (routeCursor % 4) * 3,
-    mType: routeCursor < pts.length / 2 ? 'TURN_RIGHT' : 'TURN_LEFT',
+    spd: spd,
+    mType: mType,
     mDist: mDist,
-    road: hubData.state.road || 'Nguyễn Huệ',
-    eta: hubData.state.eta || '14:25',
-    rem: Math.max(80, (pts.length - routeCursor) * 180),
+    road: road,
+    eta: '14:28',
+    rem: rem,
     vib: vib,
     reroute: false
-  });
+  };
+
+  document.getElementById('iosTurnDist').innerText = `${mDist} m · ${mType}`;
+  document.getElementById('iosTurnRoad').innerText = `Đường kế: ${road}`;
+  document.getElementById('iosSpeed').innerText = `${spd} km/h`;
+  document.getElementById('iosEta').innerText = `Còn ${rem >= 1000 ? (rem/1000).toFixed(1) + ' km' : rem + ' m'}`;
+  document.getElementById('lockNavTitle').innerText = `${mDist}m → ${road} (${spd} km/h)`;
+
+  await sendP2P(pkt);
+  await syncNearbyRoadsToWatch(curr[0], curr[1], false);
 }
 
-function toggleAutoDrive() {
-  const btn = document.getElementById('autoDriveBtn');
-  if (autoDriveTimer) {
-    clearInterval(autoDriveTimer);
-    autoDriveTimer = null;
-    btn.innerText = '▶ Bắt đầu chạy xe dọc tuyến';
+async function stepOnce() {
+  if (currentRoute.length < 2) return;
+  routeIdx = (routeIdx + 1) % currentRoute.length;
+  await emitPositionAtIndex(routeIdx);
+}
+
+function toggleDrive() {
+  const btn = document.getElementById('driveBtn');
+  if (driveTimer) {
+    clearInterval(driveTimer);
+    driveTimer = null;
+    btn.innerText = '▶ Chạy xe GPS thật';
+    btn.className = 'ios-btn green';
   } else {
-    stepForward();
-    autoDriveTimer = setInterval(stepForward, 1400);
-    btn.innerText = '⏸ Dừng chạy tự động';
+    stepOnce();
+    driveTimer = setInterval(stepOnce, 1300);
+    btn.innerText = '⏸ Đang lái xe (Bấm để dừng)';
+    btn.className = 'ios-btn red';
   }
 }
 
-async function sendTurnNow30m() {
-  if (!hubData) return;
-  const s = hubData.state;
-  await sendP2P({
-    ...s,
-    t: 'S',
-    seq: s.seq + 1,
-    mDist: 28,
-    vib: 2,
-    reroute: false
+async function searchPlace() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const res = await fetch('/api/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const box = document.getElementById('searchResults');
+  if (!data.results || data.results.length === 0) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+  box.innerHTML = data.results.map(r => `
+    <div class="search-item" onclick="selectSearchResult(${r.lat}, ${r.lng}, '${r.name.replace(/'/g, "")}')">
+      <strong>${r.name}</strong><br/>
+      <span style="color:#8e8e93">${r.address}</span>
+    </div>
+  `).join('');
+}
+
+async function selectSearchResult(lat, lng, name) {
+  document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchInput').value = name;
+  const start = riderMarker.getLatLng();
+  await startRealRoute(start.lat, start.lng, lat, lng);
+}
+
+function lockIphoneScreen() {
+  document.getElementById('lockOverlay').classList.add('locked');
+}
+
+function unlockIphoneScreen() {
+  document.getElementById('lockOverlay').classList.remove('locked');
+}
+
+function startDriveAndLock() {
+  if (!driveTimer) toggleDrive();
+  lockIphoneScreen();
+}
+
+async function sendSampleM2() {
+  await emitPositionAtIndex(routeIdx);
+}
+
+async function toggleBluetooth() {
+  btConnected = !btConnected;
+  await fetch('/api/bluetooth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: btConnected })
   });
+  const btn = document.getElementById('btToggleBtn');
+  const dot = document.getElementById('islandDot');
+  const txt = document.getElementById('islandText');
+  if (btConnected) {
+    btn.innerText = '🔌 Tắt Bluetooth tới đồng hồ (Test mất kết nối)';
+    btn.className = 'ios-btn red';
+    dot.style.background = '#30d158';
+    txt.innerText = 'P2P Fit 4 Pro';
+    // Tự động đồng bộ lại toàn bộ tuyến đường ngay khi nối lại Bluetooth!
+    await emitPositionAtIndex(routeIdx);
+  } else {
+    btn.innerText = '🔗 Bật lại Bluetooth (Tự động SYNC lại đồng hồ)';
+    btn.className = 'ios-btn green';
+    dot.style.background = '#ff453a';
+    txt.innerText = 'Đã ngắt BT';
+  }
 }
 
-async function simulateOffRoute() {
-  if (autoDriveTimer) toggleAutoDrive();
-  if (!hubData) return;
-  const s = hubData.state;
-  await sendP2P({
-    ...s,
-    t: 'S',
-    seq: s.seq + 1,
-    lat: s.lat + 0.00028,
-    lng: s.lng - 0.00022,
-    hdg: (s.hdg + 65) % 360,
-    mType: 'UTURN',
-    mDist: 45,
-    road: 'Đang tính lại đường...',
-    vib: 3,
-    reroute: true
-  });
+async function refreshLogs() {
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+    document.getElementById('m2PktCount').innerText = data.packetsReceived || 0;
+    document.getElementById('iosLogList').innerHTML = (data.recentLogs || []).map(l => `<div>${l}</div>`).join('');
+  } catch (e) {}
+  const now = new Date();
+  const hm = now.toTimeString().slice(0, 5);
+  document.getElementById('iosClock').innerText = hm;
+  document.getElementById('lockClock').innerText = hm;
 }
 
-function simulateDisconnect() {
-  if (autoDriveTimer) toggleAutoDrive();
-  forceStale = true;
-  renderWatch();
-}
-
-async function loadRealRoute(oLat, oLng, dLat, dLng, label) {
-  routeCursor = 0;
-  forceStale = false;
-  await fetch(`/api/route?origin=${oLat},${oLng}&dest=${dLat},${dLng}&vehicle=motorcycle`);
-  await pollState();
-}
-
-setInterval(pollState, 1000);
-pollState();
+window.addEventListener('DOMContentLoaded', () => {
+  initMap();
+  setInterval(refreshLogs, 1000);
+});
 </script>
 </body>
 </html>
@@ -1181,9 +1102,9 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
 
-        if path in ("/", "/watch"):
+        if path in ("/", "/iphone", "/watch"):
             lan_ip = get_lan_ip()
-            html = HTML_PAGE.replace("__LAN_IP__", lan_ip).encode("utf-8")
+            html = IPHONE_SIMULATOR_HTML.replace("__LAN_IP__", lan_ip).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
@@ -1211,8 +1132,11 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/roads":
-            with STATE_LOCK:
-                self._send_json({"tile": WATCH_HUB["roadsTile"], "roads": WATCH_HUB["roads"]})
+            lat = float((qs.get("lat") or ["10.775840"])[0])
+            lng = float((qs.get("lng") or ["106.700420"])[0])
+            radius = int((qs.get("radius") or ["340"])[0])
+            tile_id, roads = fetch_overpass_roads(lat, lng, radius)
+            self._send_json({"tile": tile_id, "roads": roads})
             return
 
         if path == "/api/search":
@@ -1225,7 +1149,7 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
                     "https://nominatim.openstreetmap.org/search?format=json&countrycodes=vn&limit=5&q="
                     + urllib.parse.quote(q)
                 )
-                req = urllib.request.Request(nom_url, headers={"User-Agent": "GNavigation-Simulator/1.0"})
+                req = urllib.request.Request(nom_url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
                 with urllib.request.urlopen(req, timeout=8) as resp:
                     items = json.loads(resp.read().decode("utf-8"))
                 results = [
@@ -1237,13 +1161,13 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
                     }
                     for it in items
                 ]
-                add_log(f"iPhone tìm kiếm địa điểm: '{q}' ({len(results)} kết quả)")
-                self._send_json({"provider": "simulator", "results": results})
+                add_log(f"iOS tìm kiếm: '{q}' ({len(results)} kết quả)")
+                self._send_json({"provider": "nominatim", "results": results})
             except Exception as e:
                 self._send_json({"results": [], "error": str(e)})
             return
 
-        self._send_json({"ok": True, "service": "g-navigation-watch-simulator"})
+        self._send_json({"ok": True, "service": "g-navigation-ios-simulator"})
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -1253,6 +1177,20 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
             payload = json.loads(raw.decode("utf-8"))
         except Exception:
             payload = {}
+
+        if parsed.path == "/api/bluetooth":
+            with STATE_LOCK:
+                enabled = bool(payload.get("enabled", True))
+                WATCH_HUB["bluetoothEnabled"] = enabled
+                if enabled:
+                    WATCH_HUB["lastPacketTs"] = time.time()
+                    add_log("Bluetooth P2P ĐÃ KẾT NỐI LẠI -> Đồng bộ sang đồng hồ DevEco!")
+                else:
+                    # Đẩy lùi lastPacketTs để sau vài giây đồng hồ phát hiện mất kết nối (Mốc 4)
+                    WATCH_HUB["lastPacketTs"] = time.time() - 13.0
+                    add_log("Bluetooth P2P ĐÃ NGẮT -> Đồng hồ sẽ ẩn chỉ dẫn cũ!")
+            self._send_json({"ok": True})
+            return
 
         if parsed.path == "/api/p2p":
             if isinstance(payload, list):
@@ -1271,8 +1209,6 @@ if __name__ == "__main__":
     lan_ip = get_lan_ip()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), WatchSimulatorHandler)
     print(f"============================================================")
-    print(f" Watch Fit 4 Pro Virtual Simulator đang chạy tại:")
-    print(f" -> Trên máy tính này: http://localhost:{PORT}")
-    print(f" -> Kết nối từ iPhone (cùng Wi-Fi): http://{lan_ip}:{PORT}")
+    print(f" G Navigation iOS Simulator đang chạy tại: http://localhost:{PORT}/iphone")
     print(f"============================================================")
     server.serve_forever()
