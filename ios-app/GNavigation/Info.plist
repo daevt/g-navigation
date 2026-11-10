@@ -46,6 +46,14 @@
 		<string>bluetooth-central</string>
 		<string>processing</string>
 	</array>
+	<!-- Cho phép kết nối tới máy ảo đồng hồ chạy trong mạng Wi-Fi LAN (http://192.168.x.x:8787) -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<!-- Cho phép gọi sang Huawei Health để xin quyền Wear Engine trên iOS -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>

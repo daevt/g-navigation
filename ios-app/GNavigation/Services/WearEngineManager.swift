@@ -157,6 +157,17 @@ final class WearEngineManager: ObservableObject {
         lastAckStatus = "Đã phát \(label) (\(data.count) bytes)"
         #endif
 
+        // Đồng thời chuyển tiếp gói tin P2P tới Máy ảo đồng hồ (Wi-Fi LAN / Relay) nếu đã cấu hình URL
+        let baseURL = AppConfig.workerBaseURL
+        if baseURL.hasPrefix("http") && !baseURL.contains("YOUR-SUBDOMAIN"),
+           let relayURL = URL(string: "\(baseURL)/api/p2p") {
+            var req = URLRequest(url: relayURL)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = data
+            URLSession.shared.dataTask(with: req).resume()
+        }
+
         if sentPacketsCount <= 5 || sentPacketsCount % 10 == 0 || label.hasPrefix("Chunk") {
             appendLog("P2P -> \(label) [\(data.count)B]")
         }
