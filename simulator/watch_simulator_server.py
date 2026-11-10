@@ -663,10 +663,32 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
     font-size: 11px;
   }
   .search-item:hover { background: #3a3a3c; }
-  #iosMap { flex: 1; width: 100%; min-height: 220px; z-index: 1; background: #0d1520; }
+  #iosMap { flex: 1; width: 100%; min-height: 220px; z-index: 1; background: #0d1520; position: relative; }
   /* Chuyển gạch bản đồ OpenStreetMap chuẩn sang giao diện Dark Navigation sắc nét, không bao giờ đòi API Key */
   #iosMap .leaflet-tile-pane {
     filter: invert(92%) hue-rotate(185deg) brightness(95%) contrast(92%);
+  }
+  .my-location-fab {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 500;
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    background: rgba(28, 28, 30, 0.92);
+    border: 1px solid #3a3a3c;
+    color: #0a84ff;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  .my-location-fab:hover {
+    background: #2c2c2e;
+    color: #64d2ff;
   }
   .nav-sheet {
     background: var(--ios-card);
@@ -920,33 +942,37 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
             <div class="search-results" id="searchResults"></div>
           </div>
 
-          <div id="iosMap"></div>
+          <div id="iosMap">
+            <button class="my-location-fab" onclick=" event.stopPropagation(); locateRealGPS(true);" title="Về vị trí hiện tại của tôi">🎯</button>
+          </div>
 
           <div class="nav-sheet">
+            <div style="font-size:11px;color:#64d2ff;font-weight:600;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="currentAddressLine">
+              📍 Vị trí hiện tại: Đang xác định địa chỉ...
+            </div>
             <div class="quick-routes">
-              <span class="chip" onclick="startRealRoute(10.7721,106.6983, 10.7769,106.7032)">🛵 Bến Thành → Nhà hát TP</span>
-              <span class="chip" onclick="startRealRoute(10.7769,106.7032, 10.7770,106.6953)">🛵 Nhà hát TP → Dinh Độc Lập</span>
-              <span class="chip" onclick="startRealRoute(21.0285,105.8542, 21.0368,105.8347)">🛵 Hồ Gươm → Lăng Bác</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 10.7725,106.6980)">🛵 Từ GPS của tôi → Chợ Bến Thành</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 10.7770,106.6953)">🛵 Từ GPS của tôi → Dinh Độc Lập</span>
+              <span class="chip" onclick="startRealRoute(realGpsLat,realGpsLng, 21.0285,105.8542)">🛵 Từ GPS của tôi → Hồ Gươm</span>
             </div>
 
             <div class="turn-preview">
               <div>
-                <div class="turn-title" id="iosTurnDist">85 m · TURN_RIGHT</div>
-                <div class="turn-sub" id="iosTurnRoad">Đường kế: Nguyễn Huệ</div>
+                <div class="turn-title" id="iosTurnDist">Đang lấy vị trí GPS thật...</div>
+                <div class="turn-sub" id="iosTurnRoad">Hãy chọn điểm đến trên bản đồ hoặc ô tìm kiếm</div>
               </div>
               <div style="text-align:right">
-                <div style="font-size:14px;font-weight:700;color:var(--ios-cyan)" id="iosSpeed">32 km/h</div>
-                <div class="turn-sub" id="iosEta">Còn 1.2 km</div>
+                <div style="font-size:14px;font-weight:700;color:var(--ios-cyan)" id="iosSpeed">0 km/h</div>
+                <div class="turn-sub" id="iosEta">GPS: Đang định vị...</div>
               </div>
             </div>
 
             <div style="display:flex;gap:6px;">
-              <button class="ios-btn green" style="flex:1" id="driveBtn" onclick="toggleDrive()">▶ Chạy xe GPS thật</button>
-              <button class="ios-btn gray" onclick="stepOnce()">⏭ +1 Bước</button>
-              <button class="ios-btn orange" onclick="lockIphoneScreen()">🔒 Khóa máy</button>
+              <button class="ios-btn green" style="flex:1" id="gpsBtn" onclick="locateRealGPS(true)">📍 Định vị GPS Thật hiện tại</button>
+              <button class="ios-btn orange" onclick="lockIphoneScreen()">🔒 Khóa màn hình</button>
             </div>
-            <div style="font-size:10px;color:var(--ios-sub);margin-top:5px;">
-              💡 Nhấp lên bản đồ iPhone để chọn điểm đến mới (gọi <strong>VIETMAP Route</strong>), hoặc <strong>nắm kéo chấm xanh xe máy</strong> chệch đường để test tự động tính lại tuyến!
+            <div style="font-size:10px;color:var(--ios-sub);margin-top:5px;" id="gpsStatusLine">
+              🛰️ Đang kết nối cảm biến GPS thật (HTML5 Geolocation / CoreLocation)... Nhấp chuột lên bản đồ để dẫn đường từ vị trí GPS thật của bạn!
             </div>
           </div>
         </div>
@@ -1055,16 +1081,21 @@ DUAL_SIMULATOR_HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
-let map, watchMap, riderMarker, destMarker, routeLine;
+let map, watchMap, riderMarker, destMarker, routeLine, accuracyCircle;
 let currentRoute = [];
 let currentSteps = [];
-let routeIdx = 0;
 let seqCounter = 10;
-let driveTimer = null;
 let btConnected = true;
 let loadedTileKey = "";
 let hubData = null;
 let lastVibSeq = -1;
+let gpsWatchId = null;
+let realGpsLat = 10.775840;
+let realGpsLng = 106.700420;
+let realGpsHeading = 0;
+let realGpsSpeedKmh = 0;
+let realGpsAccuracy = 0;
+let hasFirstGpsFix = false;
 
 function switchTab(name) {
   ['nav', 'm2'].forEach(t => {
@@ -1075,7 +1106,7 @@ function switchTab(name) {
 }
 
 function initMap() {
-  map = L.map('iosMap', { zoomControl: false }).setView([10.77584, 106.70042], 16);
+  map = L.map('iosMap', { zoomControl: false }).setView([realGpsLat, realGpsLng], 16);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19
   }).addTo(map);
@@ -1087,7 +1118,7 @@ function initMap() {
     scrollWheelZoom: false,
     doubleClickZoom: false,
     keyboard: false
-  }).setView([10.77584, 106.70042], 17);
+  }).setView([realGpsLat, realGpsLng], 17);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19
   }).addTo(watchMap);
@@ -1098,20 +1129,260 @@ function initMap() {
     iconAnchor: [10, 10]
   });
 
-  riderMarker = L.marker([10.77584, 106.70042], { icon: riderIcon, draggable: true }).addTo(map);
-  riderMarker.bindTooltip("Nắm kéo tôi đi chệch đường để test Reroute!", { direction: "top" });
+  riderMarker = L.marker([realGpsLat, realGpsLng], { icon: riderIcon, draggable: true }).addTo(map);
+  riderMarker.bindTooltip("Vị trí GPS thật của bạn (Có thể kéo để test lệch tuyến)", { direction: "top" });
 
   riderMarker.on('dragend', async function() {
     const pos = riderMarker.getLatLng();
-    await handleManualRiderMove(pos.lat, pos.lng);
+    await onRealGpsUpdate(pos.lat, pos.lng, realGpsSpeedKmh, realGpsHeading, realGpsAccuracy || 5, false);
   });
 
   map.on('click', async function(e) {
-    const start = riderMarker.getLatLng();
-    await startRealRoute(start.lat, start.lng, e.latlng.lat, e.latlng.lng);
+    await startRealRoute(realGpsLat, realGpsLng, e.latlng.lat, e.latlng.lng);
   });
 
-  startRealRoute(10.7721, 106.6983, 10.7769, 106.7032);
+  // Khởi động ngay bộ thu GPS Thật (navigator.geolocation.watchPosition)
+  startRealGpsTracking();
+}
+
+function startRealGpsTracking() {
+  const statusEl = document.getElementById('gpsStatusLine');
+  if (!navigator.geolocation) {
+    statusEl.innerText = '⚠ Trình duyệt không hỗ trợ Geolocation, đang lấy vị trí qua mạng...';
+    fallbackIpLocation();
+    return;
+  }
+
+  locateRealGPS(true);
+
+  if (gpsWatchId !== null) {
+    navigator.geolocation.clearWatch(gpsWatchId);
+  }
+  gpsWatchId = navigator.geolocation.watchPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const acc = Math.round(pos.coords.accuracy || 10);
+      const spd = pos.coords.speed && pos.coords.speed > 0 ? Math.round(pos.coords.speed * 3.6) : 0;
+      const hdg = pos.coords.heading && pos.coords.heading >= 0 ? Math.round(pos.coords.heading) : realGpsHeading;
+      const centerMap = !hasFirstGpsFix;
+      hasFirstGpsFix = true;
+      await onRealGpsUpdate(lat, lng, spd, hdg, acc, centerMap);
+    },
+    (err) => {
+      statusEl.innerText = `⚠ Quyền vị trí Windows/Trình duyệt (${err.message}) -> Đang lấy vị trí thực từ mạng IP...`;
+      if (!hasFirstGpsFix) fallbackIpLocation();
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10000
+    }
+  );
+}
+
+function locateRealGPS(recenter = true) {
+  if (!navigator.geolocation) {
+    fallbackIpLocation();
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      hasFirstGpsFix = true;
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const acc = Math.round(pos.coords.accuracy || 10);
+      const spd = pos.coords.speed && pos.coords.speed > 0 ? Math.round(pos.coords.speed * 3.6) : 0;
+      const hdg = pos.coords.heading && pos.coords.heading >= 0 ? Math.round(pos.coords.heading) : realGpsHeading;
+      await onRealGpsUpdate(lat, lng, spd, hdg, acc, recenter);
+    },
+    () => {
+      fallbackIpLocation();
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
+  );
+}
+
+async function fallbackIpLocation() {
+  try {
+    const res = await fetch('https://get.geojs.io/v1/ip/geo.json');
+    const data = await res.json();
+    if (data.latitude && data.longitude) {
+      const lat = parseFloat(data.latitude);
+      const lng = parseFloat(data.longitude);
+      hasFirstGpsFix = true;
+      await onRealGpsUpdate(lat, lng, 0, 0, 50, true);
+    }
+  } catch (e) {}
+}
+
+let lastReverseTile = "";
+let currentStreetLabel = "Vị trí hiện tại";
+
+async function updateCurrentAddress(lat, lng) {
+  const rKey = `${Math.round(lat * 500)}_${Math.round(lng * 500)}`;
+  if (rKey === lastReverseTile) return;
+  lastReverseTile = rKey;
+  try {
+    const res = await fetch(`/api/reverse?lat=${lat}&lng=${lng}`);
+    const data = await res.json();
+    if (data.address) {
+      currentStreetLabel = data.street || data.name || "Vị trí hiện tại";
+      document.getElementById('currentAddressLine').innerText = `📍 Vị trí hiện tại: ${data.address}`;
+    }
+  } catch (e) {}
+}
+
+async function onRealGpsUpdate(lat, lng, spdKmh, hdg, accuracyMeters, recenterMap = false) {
+  updateCurrentAddress(lat, lng);
+  // Tính góc di chuyển nếu phần cứng không trả về heading nhưng tọa độ có thay đổi
+  if (haversineMeters(realGpsLat, realGpsLng, lat, lng) > 2) {
+    const dy = lat - realGpsLat;
+    const dx = lng - realGpsLng;
+    hdg = Math.round((Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
+  }
+
+  realGpsLat = lat;
+  realGpsLng = lng;
+  realGpsSpeedKmh = spdKmh;
+  realGpsHeading = hdg;
+  realGpsAccuracy = accuracyMeters;
+
+  riderMarker.setLatLng([lat, lng]);
+  if (accuracyCircle) map.removeLayer(accuracyCircle);
+  accuracyCircle = L.circle([lat, lng], {
+    radius: Math.min(accuracyMeters, 120),
+    color: '#00e5ff',
+    weight: 1,
+    fillOpacity: 0.12
+  }).addTo(map);
+
+  if (recenterMap) {
+    map.setView([lat, lng], 16);
+  }
+
+  document.getElementById('gpsStatusLine').innerText =
+    `🛰️ GPS Thật: ${lat.toFixed(6)}, ${lng.toFixed(6)} (Độ chính xác ±${accuracyMeters}m)`;
+
+  await syncNearbyRoadsToWatch(lat, lng, false);
+
+  // Nếu chưa chọn tuyến đường: gửi trực tiếp vị trí GPS thật sang đồng hồ Fit 4 Pro
+  if (currentRoute.length < 2) {
+    seqCounter += 1;
+    document.getElementById('iosTurnDist').innerText = `GPS Thật (±${accuracyMeters}m)`;
+    document.getElementById('iosTurnRoad').innerText = `Tọa độ: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    document.getElementById('iosSpeed').innerText = `${spdKmh} km/h`;
+    document.getElementById('iosEta').innerText = `Chưa chọn đích`;
+
+    await sendP2P({
+      t: 'S',
+      seq: seqCounter,
+      ts: Math.floor(Date.now() / 1000),
+      lat: lat,
+      lng: lng,
+      hdg: hdg,
+      spd: spdKmh,
+      mType: 'STRAIGHT',
+      mDist: 0,
+      road: currentStreetLabel,
+      eta: '--:--',
+      rem: 0,
+      vib: 0,
+      reroute: false
+    });
+    return;
+  }
+
+  // Nếu đang có tuyến đường VIETMAP: đối chiếu vị trí GPS thật lên tuyến đường
+  let minD = 999999;
+  let closestIdx = 0;
+  for (let i = 0; i < currentRoute.length; i++) {
+    const d = haversineMeters(lat, lng, currentRoute[i][0], currentRoute[i][1]);
+    if (d < minD) { minD = d; closestIdx = i; }
+  }
+
+  // Nếu vị trí GPS thật đi lệch khỏi tuyến > 42m -> Rung báo lệch tuyến & gọi VIETMAP tính lại đường từ vị trí GPS thật!
+  if (minD > 42 && destMarker) {
+    seqCounter += 1;
+    document.getElementById('iosTurnDist').innerText = '⚠ Lệch tuyến (' + Math.round(minD) + 'm)';
+    document.getElementById('iosTurnRoad').innerText = 'Đang gọi VIETMAP tính lại đường từ GPS thật...';
+
+    await sendP2P({
+      t: 'S',
+      seq: seqCounter,
+      ts: Math.floor(Date.now() / 1000),
+      lat: lat,
+      lng: lng,
+      hdg: hdg,
+      spd: spdKmh,
+      mType: 'UTURN',
+      mDist: Math.round(minD),
+      road: 'Đang tính lại đường...',
+      eta: '--:--',
+      rem: 0,
+      vib: 3,
+      reroute: true
+    });
+
+    const dest = destMarker.getLatLng();
+    await startRealRoute(lat, lng, dest.lat, dest.lng, true);
+    return;
+  }
+
+  // Tính khoảng cách từ vị trí GPS thật tới ngã rẽ VIETMAP tiếp theo
+  let nextStep = currentSteps.find(s => haversineMeters(lat, lng, s.location[0], s.location[1]) > 15) || currentSteps[currentSteps.length - 1];
+  let mDist = nextStep ? Math.round(haversineMeters(lat, lng, nextStep.location[0], nextStep.location[1])) : 0;
+  let mType = nextStep ? nextStep.maneuverType : 'STRAIGHT';
+  let road = nextStep ? nextStep.roadName : 'Đường phía trước';
+
+  if ( closestIdx < currentRoute.length - 1 && spdKmh === 0 ) {
+    const nextPt = currentRoute[closestIdx + 1];
+    const dy = nextPt[0] - lat;
+    const dx = nextPt[1] - lng;
+    if (dy !== 0 || dx !== 0) {
+      hdg = Math.round((Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
+    }
+  }
+
+  let rem = haversineMeters(lat, lng, currentRoute[closestIdx][0], currentRoute[closestIdx][1]);
+  for (let i = closestIdx; i < currentRoute.length - 1; i++) {
+    rem += haversineMeters(currentRoute[i][0], currentRoute[i][1], currentRoute[i+1][0], currentRoute[i+1][1]);
+  }
+  rem = Math.round(rem);
+
+  if (rem < 20) {
+    mType = 'ARRIVE';
+    mDist = 0;
+    road = 'Đã tới điểm đích';
+  }
+
+  const vib = mDist <= 35 && mDist > 10 ? 2 : (mDist <= 105 && mDist >= 75 ? 1 : 0);
+
+  seqCounter += 1;
+  const pkt = {
+    t: 'S',
+    seq: seqCounter,
+    ts: Math.floor(Date.now() / 1000),
+    lat: lat,
+    lng: lng,
+    hdg: hdg,
+    spd: spdKmh,
+    mType: mType,
+    mDist: mDist,
+    road: road,
+    eta: '14:45',
+    rem: rem,
+    vib: vib,
+    reroute: false
+  };
+
+  document.getElementById('iosTurnDist').innerText = `${mDist} m · ${mType}`;
+  document.getElementById('iosTurnRoad').innerText = `Đường kế: ${road}`;
+  document.getElementById('iosSpeed').innerText = `${spdKmh} km/h`;
+  document.getElementById('iosEta').innerText = `Còn ${rem >= 1000 ? (rem/1000).toFixed(1) + ' km' : rem + ' m'}`;
+  document.getElementById('lockNavTitle').innerText = `${mDist}m → ${road} (${spdKmh} km/h)`;
+
+  await sendP2P(pkt);
 }
 
 async function sendP2P(packets) {
@@ -1184,7 +1455,7 @@ async function startRealRoute(oLat, oLng, dLat, dLng, isReroute = false) {
     }));
     await sendP2P(rPkts);
     await syncNearbyRoadsToWatch(oLat, oLng, true);
-    await emitPositionAtIndex(0);
+    await onRealGpsUpdate(oLat, oLng, realGpsSpeedKmh, realGpsHeading, realGpsAccuracy || 10, false);
   } catch (e) {}
 }
 
@@ -1340,13 +1611,12 @@ async function searchPlace() {
 async function selectSearchResult(lat, lng, name) {
   document.getElementById('searchResults').style.display = 'none';
   document.getElementById('searchInput').value = name;
-  const start = riderMarker.getLatLng();
-  await startRealRoute(start.lat, start.lng, lat, lng);
+  await startRealRoute(realGpsLat, realGpsLng, lat, lng);
 }
 
 function lockIphoneScreen() { document.getElementById('lockOverlay').classList.add('locked'); }
 function unlockIphoneScreen() { document.getElementById('lockOverlay').classList.remove('locked'); }
-function startDriveAndLock() { if (!driveTimer) toggleDrive(); lockIphoneScreen(); }
+function startDriveAndLock() { lockIphoneScreen(); }
 
 async function toggleBluetooth() {
   btConnected = !btConnected;
@@ -1363,7 +1633,7 @@ async function toggleBluetooth() {
     btn.className = 'ios-btn red';
     dot.style.background = '#30d158';
     txt.innerText = 'P2P Fit 4 Pro';
-    await emitPositionAtIndex(routeIdx);
+    await onRealGpsUpdate(realGpsLat, realGpsLng, realGpsSpeedKmh, realGpsHeading, realGpsAccuracy || 10, false);
   } else {
     btn.innerText = '🔗 Bật lại Bluetooth (Tự động SYNC lại đồng hồ)';
     btn.className = 'ios-btn green';
@@ -1618,6 +1888,41 @@ class WatchSimulatorHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
             return
+
+        if path == "/api/reverse":
+            lat = float((qs.get("lat") or ["10.775840"])[0])
+            lng = float((qs.get("lng") or ["106.700420"])[0])
+            if VIETMAP_API_KEY:
+                try:
+                    rev_url = (
+                        f"https://maps.vietmap.vn/api/reverse?api-version=1.1"
+                        f"&apikey={urllib.parse.quote(VIETMAP_API_KEY)}"
+                        f"&point.lat={lat:.6f}&point.lon={lng:.6f}"
+                    )
+                    req = urllib.request.Request(rev_url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                    feats = (body.get("data") or {}).get("features") or []
+                    if feats:
+                        props = feats[0].get("properties") or {}
+                        name = str(props.get("name") or props.get("street") or "Vị trí hiện tại")
+                        addr = str(props.get("label") or name)
+                        self._send_json({"provider": "vietmap", "name": name, "street": name, "address": addr})
+                        return
+                except Exception:
+                    pass
+            try:
+                nom_url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat:.6f}&lon={lng:.6f}"
+                req = urllib.request.Request(nom_url, headers={"User-Agent": "GNavigation-iOS-Sim/1.0"})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    it = json.loads(resp.read().decode("utf-8"))
+                addr = str(it.get("display_name") or f"{lat:.5f}, {lng:.5f}")
+                road = str((it.get("address") or {}).get("road") or addr.split(",")[0])
+                self._send_json({"provider": "nominatim", "name": road, "street": road, "address": addr})
+                return
+            except Exception:
+                self._send_json({"name": "Vị trí hiện tại", "street": "Vị trí hiện tại", "address": f"{lat:.5f}, {lng:.5f}"})
+                return
 
         if path == "/api/roads":
             lat = float((qs.get("lat") or ["10.775840"])[0])

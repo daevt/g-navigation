@@ -43,17 +43,41 @@ struct ContentView: View {
     private var navigationTab: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                // Thanh trạng thái kết nối đồng hồ
-                HStack {
-                    Circle()
-                        .fill(wearManager.state == .connectedP2P ? Color.green : Color.orange)
-                        .frame(width: 10, height: 10)
-                    Text(wearManager.state.rawValue)
-                        .font(.caption.bold())
-                    Spacer()
-                    Text("Đã gửi: \(wearManager.sentPacketsCount) gói")
+                // Thanh trạng thái kết nối đồng hồ & Vị trí hiện tại
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Circle()
+                            .fill(wearManager.state == .connectedP2P ? Color.green : Color.orange)
+                            .frame(width: 10, height: 10)
+                        Text(wearManager.state.rawValue)
+                            .font(.caption.bold())
+                        Spacer()
+                        Text("Đã gửi: \(wearManager.sentPacketsCount) gói")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Image(systemName: "location.fill")
+                            .foregroundStyle(.cyan)
+                            .font(.caption)
+                        Text(
+                            navEngine.hasRealGPSFix
+                                ? String(format: "Vị trí hiện tại: %.5f, %.5f (±%dm)", navEngine.currentLocation.latitude, navEngine.currentLocation.longitude, navEngine.gpsAccuracyMeters)
+                                : "Đang lấy vị trí GPS hiện tại..."
+                        )
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.cyan)
+                        Spacer()
+                        Button {
+                            navEngine.requestLocationPermissions()
+                        } label: {
+                            Label("Vị trí hiện tại", systemImage: "scope")
+                                .font(.caption2.bold())
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)

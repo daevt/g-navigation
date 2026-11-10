@@ -9,8 +9,10 @@ import Combine
 /// - Chia nhỏ tuyến đường & cụm đường nền gửi sang Huawei Watch Fit 4 Pro
 @MainActor
 final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDelegate {
-    @Published var currentLocation: CLLocationCoordinate2D = CLLocationCoordinate2D(latitude: 10.775840, longitude: 106.700420)
-    @Published var currentHeading: Double = 42
+    @Published var currentLocation: CLLocationCoordinate2D = CLLocationCoordinate2D(latitude: 21.028511, longitude: 105.854444)
+    @Published var hasRealGPSFix: Bool = false
+    @Published var gpsAccuracyMeters: Int = 0
+    @Published var currentHeading: Double = 0
     @Published var currentSpeedKmh: Int = 0
 
     @Published var isNavigating: Bool = false
@@ -52,6 +54,9 @@ final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDeleg
                 self?.resyncAllToWatch()
             }
         }
+
+        // Khởi động GPS thật ngay khi mở app
+        requestLocationPermissions()
     }
 
     func requestLocationPermissions() {
@@ -325,13 +330,37 @@ final class NavigationEngine: NSObject, ObservableObject, CLLocationManagerDeleg
         guard let latest = locations.last else { return }
         Task { @MainActor in
             self.currentLocation = latest.coordinate
+            self.hasRealGPSFix = true
+            self.gpsAccuracyMeters = max(1, Int(round(latest.horizontalAccuracy)))
             if latest.course >= 0 {
                 self.currentHeading = latest.course
             }
             if latest.speed >= 0 {
                 self.currentSpeedKmh = Int(round(latest.speed * 3.6))
             }
-            self.evaluatePositionOnRoute(latest)
+            if self.isNavigating {
+                self.evaluatePositionOnRoute(latest)
+            } else {
+                // Ngay cả khi chưa chọn điểm đến, vẫn đồng bộ vị trí GPS thật sang đồng hồ
+                self.packetSeq += 1
+                let freeRidePkt = P2PStatePacket(
+                    seq: self.packetSeq,
+                    ts: Int(Date().timeIntervalSince1970),
+                    lat: latest.coordinate.latitude,
+                    lng: latest.coordinate.longitude,
+                    hdg: Int(self.currentHeading),
+                    spd: self.currentSpeedKmh,
+                    mType: "STRAIGHT",
+                    mDist: 0,
+                    road: "GPS thực tế (±\(self.gpsAccuracyMeters)m)",
+                    eta: "--:--",
+                    rem: 0,
+                    vib: 0,
+                    reroute: false
+                )
+                self.wearManager.sendStatePacket(freeRidePkt)
+                await self.updateNearbyRoadsIfNeeded(for: latest.coordinate)
+            }
         }
     }
 
